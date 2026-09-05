@@ -1,0 +1,8 @@
+# formkit 的全部依赖 —— 刻意与 Lexoid 主依赖解耦。
+# 这五个包在 Intel Mac 上都有预编译 wheel，所以 formkit 可以脱离 Docker
+# 直接在宿主机跑（Lexoid 本体因为 torch/paddlepaddle 做不到）。
+pillow>=10.0
+pypdfium2>=4.30,<5.12   # 5.12+ 的 mac x86_64 wheel 要求 macOS 13+；这个区间要求 11+
+google-genai>=1.0       # extract 默认走 gemini（原生支持 box_2d 坐标检测）
+openai>=1.40            # 可选：--api openai
+python-dotenv>=1.0      # 自动读取仓库根目录的 .env

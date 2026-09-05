@@ -1,0 +1,652 @@
+import json
+import os
+import re
+import tempfile
+import textwrap
+from concurrent.futures import ProcessPoolExecutor
+from enum import Enum
+from functools import wraps
+from glob import glob
+from time import time
+from typing import Callable, Dict, List, Optional, Type, Union
+
+from lexoid.core.conversion_utils import (
+    convert_doc_to_base64_images,
+    convert_schema_to_dict,
+    convert_to_pdf,
+)
+from lexoid.core.parse_type.llm_parser import (
+    create_response,
+    get_api_provider_for_model,
+    parse_llm_doc,
+)
+from lexoid.core.parse_type.static_parser import parse_static_doc
+from lexoid.core.prompt_templates import (
+    LATEX_FIRST_PAGE_PROMPT,
+    LATEX_LAST_PAGE_PROMPT,
+    LATEX_MIDDLE_PAGE_PROMPT,
+    LATEX_USER_PROMPT,
+    latex_page_value_id_prompt,
+)
+from lexoid.core.utils import (
+    DEFAULT_LLM,
+    DEFAULT_MAX_IMAGE_DIMENSION,
+    DEFAULT_STATIC_FRAMEWORK,
+    LEXOID_STORAGE_DIR,
+    bbox_router,
+    create_sub_pdf,
+    download_file,
+    get_file_type,
+    get_webpage_soup,
+    has_image_in_pdf,
+    is_supported_file_type,
+    is_supported_url_file_type,
+    recursive_read_html,
+    resize_image_if_needed,
+    router,
+    split_pdf,
+)
+from loguru import logger
+
+
+class ParserType(Enum):
+    LLM_PARSE = "LLM_PARSE"
+    STATIC_PARSE = "STATIC_PARSE"
+    AUTO = "AUTO"
+
+
+def retry_with_different_parser_type(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            if len(args) > 0:
+                kwargs["path"] = args[0]
+            if len(args) > 1:
+                if args[1] == ParserType.AUTO:
+                    router_priority = kwargs.get("router_priority", "speed")
+                    autoselect_llm = kwargs.get("autoselect_llm", False)
+                    if router_priority == "cost" and has_image_in_pdf(kwargs["path"]):
+                        # Handling this outside of router to allow for multiple func calls
+                        kwargs["parser_type"] = ParserType.STATIC_PARSE
+                        kwargs["framework"] = "paddleocr"
+                        result = func(**kwargs)
+                        character_threshold = kwargs.get("character_threshold", 100)
+                        len_result = len(result["raw"].strip())
+                        if len_result < character_threshold:
+                            logger.debug(
+                                f"Low character count detected ({len_result} < {character_threshold}), returning result"
+                            )
+                            return result
+                        logger.debug(
+                            f"Character count above threshold ({len_result} >= {character_threshold}), switching to LLM_PARSE"
+                        )
+                        kwargs["parser_type"] = ParserType.LLM_PARSE
+                        return func(**kwargs)
+                    routed_parser_type, model = router(
+                        kwargs["path"], router_priority, autoselect_llm=autoselect_llm
+                    )
+                    if model is not None:
+                        kwargs["model"] = model
+                    parser_type = ParserType[routed_parser_type]
+                    logger.debug(f"Auto-detected parser type: {parser_type}")
+                    kwargs["routed"] = True
+                else:
+                    parser_type = args[1]
+                kwargs["parser_type"] = parser_type
+            return func(**kwargs)
+        except Exception as e:
+            if kwargs.get("retry_on_fail", True) is False:
+                logger.error(
+                    f"Parsing failed with error: {e}. No fallback parser available."
+                )
+                raise e
+            parse_type = kwargs.get("parser_type")
+            routed = kwargs.get("routed", False)
+            if parse_type == ParserType.LLM_PARSE and routed:
+                logger.warning(
+                    f"LLM_PARSE failed with error: {e}. Retrying with STATIC_PARSE."
+                )
+                kwargs["parser_type"] = ParserType.STATIC_PARSE
+                kwargs["routed"] = False
+                return func(**kwargs)
+            elif parse_type == ParserType.STATIC_PARSE and routed:
+                logger.warning(
+                    f"STATIC_PARSE failed with error: {e}. Retrying with LLM_PARSE."
+                )
+                kwargs["parser_type"] = ParserType.LLM_PARSE
+                kwargs["routed"] = False
+                return func(**kwargs)
+            else:
+                logger.error(
+                    f"Parsing failed with error: {e}. No fallback parser available."
+                )
+                raise e
+
+    return wrapper
+
+
+@retry_with_different_parser_type
+def parse_chunk(path: str, parser_type: ParserType, **kwargs) -> Dict:
+    """
+    Parses a file using the specified parser type.
+
+    Args:
+        path (str): The file path or URL.
+        parser_type (ParserType): The type of parser to use (LLM_PARSE, STATIC_PARSE, or AUTO).
+        **kwargs: Additional arguments for the parser.
+
+    Returns:
+        Dict: Dictionary containing:
+            - raw: Full markdown content as string
+            - segments: List of dictionaries with metadata and content
+            - title: Title of the document
+            - url: URL if applicable
+            - parent_title: Title of parent doc if recursively parsed
+            - recursive_docs: List of dictionaries for recursively parsed documents
+            - token_usage: Dictionary containing token usage statistics
+            - parser_used: Which parser was actually used
+    """
+    kwargs["start"] = (
+        int(os.path.basename(path).split("_")[1]) - 1 if kwargs.get("split") else 0
+    )
+    if parser_type == ParserType.STATIC_PARSE:
+        logger.debug("Using static parser")
+        result = parse_static_doc(path, **kwargs)
+    else:
+        logger.debug("Using LLM parser")
+        result = parse_llm_doc(path, **kwargs)
+
+    result["parser_used"] = parser_type
+
+    # Emit concise page progress after the chunk has completed. Keeping this at the
+    # chunk boundary makes it work consistently for every parser implementation.
+    try:
+        pages = [
+            seg.get("metadata", {}).get("page")
+            for seg in result.get("segments", [])
+            if seg.get("metadata") and "page" in seg.get("metadata", {})
+        ]
+        if pages:
+            total_pages = kwargs.get("total_pages")
+            for page in pages:
+                if total_pages and isinstance(page, int):
+                    logger.info(f"Progress: page {page}/{total_pages} completed")
+                else:
+                    logger.info(f"Progress: page {page} completed")
+    except Exception as e:
+        # Non-fatal: logging should not break parsing
+        logger.warning(f"Failed to log parsed page numbers: {e}")
+    return_bboxes = kwargs.get("return_bboxes", False)
+    segments = result.get("segments") or []
+    has_bboxes = bool(segments[0].get("bboxes")) if segments else False
+    bbox_framework = kwargs.get("bbox_framework", None)
+    framework = kwargs.get("framework", DEFAULT_STATIC_FRAMEWORK)
+    bbox_framework_different = bbox_framework and bbox_framework != framework
+    if return_bboxes and (not has_bboxes or bbox_framework_different):
+        logger.debug("Extracting bounding boxes...")
+        if kwargs.get("bbox_framework", "auto") == "auto":
+            kwargs["bbox_framework"] = bbox_router(path)
+        kwargs["parser_type"] = ParserType.STATIC_PARSE
+        kwargs["framework"] = kwargs["bbox_framework"]
+        result_static = parse_static_doc(path, **kwargs)
+        for i, segment in enumerate(result["segments"]):
+            if i < len(result_static["segments"]):
+                segment["bboxes"] = result_static["segments"][i].get("bboxes", [])
+
+    return result
+
+
+def parse_chunk_list(
+    file_paths: List[str], parser_type: ParserType, kwargs: Dict
+) -> Dict:
+    """
+    Parses a list of files using the specified parser type.
+
+    Args:
+        file_paths (list): List of file paths.
+        parser_type (ParserType): The type of parser to use.
+        kwargs (dict): Additional arguments for the parser.
+
+    Returns:
+        Dict: Dictionary containing parsed document data
+    """
+    combined_segments = []
+    raw_texts = []
+    parsers_used = []
+    token_usage = {"input": 0, "output": 0, "llm_page_count": 0}
+    for file_path in file_paths:
+        result = parse_chunk(file_path, parser_type, **kwargs)
+        combined_segments.extend(result["segments"])
+        raw_texts.append(result["raw"])
+        parser_used = result.get("parser_used")
+        parsers_used.append(parser_used.value if parser_used else "UNKNOWN")
+        if parser_used == ParserType.LLM_PARSE and "token_usage" in result:
+            token_usage["input"] += result["token_usage"]["input"]
+            token_usage["output"] += result["token_usage"]["output"]
+            token_usage["llm_page_count"] += len(result["segments"])
+    token_usage["total"] = token_usage["input"] + token_usage["output"]
+
+    return {
+        "raw": "\n\n".join(raw_texts),
+        "segments": combined_segments,
+        "title": kwargs.get("title", ""),
+        "url": kwargs.get("url", ""),
+        "parent_title": kwargs.get("parent_title", ""),
+        "recursive_docs": [],
+        "token_usage": token_usage,
+        "parsers_used": parsers_used,
+    }
+
+
+def parse(
+    path: str,
+    parser_type: Union[str, ParserType] = "AUTO",
+    pages_per_split: int = 4,
+    max_processes: int = 4,
+    **kwargs,
+) -> Dict:
+    """
+    Parses a document or URL, optionally splitting it into chunks and using multiprocessing.
+
+    Args:
+        path (str): The file path or URL.
+        parser_type (Union[str, ParserType], optional): Parser type ("LLM_PARSE", "STATIC_PARSE", or "AUTO").
+        pages_per_split (int, optional): Number of pages per split for chunking.
+        max_processes (int, optional): Maximum number of processes for parallel processing.
+        **kwargs: Additional arguments for the parser.
+
+    Returns:
+        Dict: Dictionary containing:
+            - raw: Full markdown content as string
+            - segments: List of dictionaries with metadata and content
+            - title: Title of the document
+            - url: URL if applicable
+            - parent_title: Title of parent doc if recursively parsed
+            - recursive_docs: List of dictionaries for recursively parsed documents
+            - token_usage: Dictionary containing token usage statistics
+    """
+    kwargs["title"] = os.path.basename(path)
+    kwargs["pages_per_split_"] = pages_per_split
+    as_pdf = kwargs.get("as_pdf", False)
+    depth = kwargs.get("depth", 1)
+
+    if type(parser_type) is str:
+        parser_type = ParserType[parser_type]
+    if (
+        parser_type == ParserType.LLM_PARSE
+        and kwargs.get("api_provider") == "ollama"
+        and max_processes != 1
+    ):
+        logger.warning(
+            "Ollama local inference does not support Lexoid multiprocess fanout well. "
+            "Forcing max_processes=1."
+        )
+        max_processes = 1
+    if (
+        path.lower().endswith((".doc", ".docx"))
+        and parser_type != ParserType.STATIC_PARSE
+    ):
+        as_pdf = True
+    if path.lower().endswith(".xlsx") and parser_type == ParserType.LLM_PARSE:
+        logger.warning("LLM_PARSE does not support .xlsx files. Using STATIC_PARSE.")
+        parser_type = ParserType.STATIC_PARSE
+    if path.lower().endswith(".pptx") and parser_type == ParserType.LLM_PARSE:
+        logger.warning("LLM_PARSE does not support .pptx files. Using STATIC_PARSE.")
+        parser_type = ParserType.STATIC_PARSE
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        kwargs["temp_dir"] = temp_dir
+        if path.startswith(("http://", "https://")):
+            kwargs["url"] = path
+            download_dir = kwargs.get(
+                "save_dir",
+                LEXOID_STORAGE_DIR or os.path.join(temp_dir, "downloads/"),
+            )
+            os.makedirs(download_dir, exist_ok=True)
+            if is_supported_url_file_type(path):
+                path = download_file(path, download_dir)
+            elif as_pdf:
+                soup = get_webpage_soup(path)
+                kwargs["title"] = str(soup.title).strip() if soup.title else "Untitled"
+                pdf_filename = kwargs.get("save_filename", f"webpage_{int(time())}.pdf")
+                if not pdf_filename.endswith(".pdf"):
+                    pdf_filename += ".pdf"
+                pdf_path = os.path.join(download_dir, pdf_filename)
+                logger.debug("Converting webpage to PDF...")
+                path = convert_to_pdf(path, pdf_path)
+            else:
+                return recursive_read_html(path, depth)
+
+        assert is_supported_file_type(
+            path
+        ), f"Unsupported file type {os.path.splitext(path)[1]}"
+
+        if "image" in get_file_type(path):
+            # Resize image if too large
+            max_dimension = kwargs.get(
+                "max_image_dimension", DEFAULT_MAX_IMAGE_DIMENSION
+            )
+            path = resize_image_if_needed(
+                path, max_dimension=max_dimension, tmpdir=temp_dir
+            )
+
+        if as_pdf and not path.lower().endswith(".pdf"):
+            pdf_path = os.path.join(temp_dir, "converted.pdf")
+            logger.debug("Converting file to PDF")
+            path = convert_to_pdf(path, pdf_path)
+
+        if "page_nums" in kwargs and path.lower().endswith(".pdf"):
+            sub_pdf_dir = os.path.join(temp_dir, "sub_pdfs")
+            os.makedirs(sub_pdf_dir, exist_ok=True)
+            sub_pdf_path = os.path.join(sub_pdf_dir, f"{os.path.basename(path)}")
+            path = create_sub_pdf(path, sub_pdf_path, kwargs["page_nums"])
+
+        if not path.lower().endswith(".pdf"):
+            kwargs["split"] = False
+            result = parse_chunk_list([path], parser_type, kwargs)
+        else:
+            kwargs["split"] = True
+            split_dir = os.path.join(temp_dir, "splits/")
+            os.makedirs(split_dir, exist_ok=True)
+            split_pdf(path, split_dir, pages_per_split)
+            split_files = sorted(glob(os.path.join(split_dir, "*.pdf")))
+            kwargs["total_pages"] = sum(
+                int(os.path.basename(split_file).rsplit("_", 1)[1].split(".")[0])
+                - int(os.path.basename(split_file).split("_")[1])
+                + 1
+                for split_file in split_files
+            )
+
+            chunk_size = max(1, len(split_files) // max_processes)
+            file_chunks = [
+                split_files[i : i + chunk_size]
+                for i in range(0, len(split_files), chunk_size)
+            ]
+
+            process_args = [(chunk, parser_type, kwargs) for chunk in file_chunks]
+
+            if max_processes == 1 or len(file_chunks) == 1:
+                chunk_results = [parse_chunk_list(*args) for args in process_args]
+            else:
+                with ProcessPoolExecutor(max_workers=max_processes) as executor:
+                    chunk_results = list(
+                        executor.map(parse_chunk_list, *zip(*process_args))
+                    )
+
+            # Combine results from all chunks
+            result = {
+                "raw": "\n\n".join(r["raw"] for r in chunk_results),
+                "segments": [seg for r in chunk_results for seg in r["segments"]],
+                "title": kwargs["title"],
+                "url": kwargs.get("url", ""),
+                "parent_title": kwargs.get("parent_title", ""),
+                "recursive_docs": [],
+                "token_usage": {
+                    "input": sum(r["token_usage"]["input"] for r in chunk_results),
+                    "output": sum(r["token_usage"]["output"] for r in chunk_results),
+                    "llm_page_count": sum(
+                        r["token_usage"]["llm_page_count"] for r in chunk_results
+                    ),
+                    "total": sum(r["token_usage"]["total"] for r in chunk_results),
+                },
+                "parsers_used": [
+                    parser
+                    for r in chunk_results
+                    for parser in r.get("parsers_used", [])
+                ],
+            }
+
+        if "api_cost_mapping" in kwargs and "token_usage" in result:
+            api_cost_mapping = kwargs["api_cost_mapping"]
+            if isinstance(api_cost_mapping, dict):
+                api_cost_mapping = api_cost_mapping
+            elif isinstance(api_cost_mapping, str) and os.path.exists(api_cost_mapping):
+                with open(api_cost_mapping, "r") as f:
+                    api_cost_mapping = json.load(f)
+            else:
+                raise ValueError(f"Unsupported API cost value: {api_cost_mapping}.")
+
+            api_cost = api_cost_mapping.get(kwargs.get("model", DEFAULT_LLM), None)
+            if api_cost:
+                token_usage = result["token_usage"]
+                token_cost = {
+                    "input": token_usage["input"] * api_cost["input"] / 1_000_000,
+                    "input-image": api_cost.get("input-image", 0)
+                    * token_usage.get("llm_page_count", 0),
+                    "output": token_usage["output"] * api_cost["output"] / 1_000_000,
+                }
+                token_cost["total"] = (
+                    token_cost["input"]
+                    + token_cost["input-image"]
+                    + token_cost["output"]
+                )
+                result["token_cost"] = token_cost
+
+        if as_pdf:
+            result["pdf_path"] = path
+
+    if depth > 1:
+        recursive_docs = []
+        for segment in result["segments"]:
+            urls = re.findall(
+                r'https?://[^\s<>"\']+|www\.[^\s<>"\']+(?:\.[^\s<>"\']+)*',
+                segment["content"],
+            )
+            for url in urls:
+                if "](" in url:
+                    url = url.split("](")[-1]
+                logger.debug(f"Reading content from {url}")
+                if not url.startswith("http"):
+                    url = "https://" + url
+
+                kwargs_cp = kwargs.copy()
+                kwargs_cp["depth"] = depth - 1
+                kwargs_cp["parent_title"] = result["title"]
+                sub_doc = parse(
+                    url,
+                    parser_type=parser_type,
+                    pages_per_split=pages_per_split,
+                    max_processes=max_processes,
+                    **kwargs_cp,
+                )
+                recursive_docs.append(sub_doc)
+
+        result["recursive_docs"] = recursive_docs
+
+    return result
+
+
+def parse_with_schema(
+    path: str,
+    schema: Union[Dict, Type],
+    api: Optional[str] = None,
+    model: str = "gpt-4o-mini",
+    example_schema: Optional[Dict] = None,
+    alternate_keys: Optional[Dict] = None,
+    fill_single_schema: bool = False,
+    **kwargs,
+) -> List[List[Dict]]:
+    """
+    Parses a PDF using an LLM to generate structured output conforming to a given JSON schema.
+
+    Args:
+        path (str): Path to the PDF file.
+        schema (Union[Dict, Type]): JSON or Dataclass schema to which the parsed output should conform.
+        api (str, optional): LLM API provider (for example "openai", "deepseek", "minimax", "huggingface", "together", "openrouter", or "fireworks").
+        model (str, optional): LLM model name.
+        example_schema (Dict): JSON schema with filled example values.
+        alternate_keys (Dict): JSON schema with alternate keys for the keys in the schema.
+        **kwargs: Additional arguments for the parser (e.g.: temperature, max_tokens).
+
+    Returns:
+        List[Dict]: List of dictionaries, one for each page, each conforming to the provided schema.
+    """
+    if example_schema is None:
+        example_schema = {}
+    if alternate_keys is None:
+        alternate_keys = {}
+    if not api:
+        api = get_api_provider_for_model(model)
+        logger.debug(f"Using API provider: {api}")
+
+    json_schema = convert_schema_to_dict(schema)
+
+    system_prompt = f"""
+        The output should be formatted as a JSON instance that conforms to the JSON schema below.
+
+        As an example, for the schema {{
+        "properties": {{
+            "foo": {{
+            "title": "Foo",
+            "description": "a list of strings",
+            "type": "array",
+            "items": {{"type": "string"}}
+            }}
+        }},
+        "required": ["foo"]
+        }}, the object {{"foo": ["bar", "baz"]}} is valid. The object {{"properties": {{"foo": ["bar", "baz"]}}}} is not.
+
+        Here is the output schema:
+        {json.dumps(json_schema, indent=2)}
+    """
+
+    # Conditionally append example_schema section
+    if example_schema:
+        system_prompt += f"""
+
+        Here is an example-filled schema to guide formatting:
+        {json.dumps(example_schema, indent=2)}
+        """
+
+    # Conditionally append alternate_keys section
+    if alternate_keys:
+        system_prompt += f"""
+
+        Here are alternate keys you may encounter while parsing:
+        {json.dumps(alternate_keys, indent=2)}
+        """
+
+    system_prompt = textwrap.dedent(system_prompt)
+
+    user_prompt = "You are an AI agent that parses documents and returns them in the specified JSON format. Please parse the document and return it in the required format."
+
+    if fill_single_schema:
+        if "api" in kwargs:
+            del kwargs["api"]
+        response = parse(
+            path, parser_type=ParserType.LLM_PARSE, api=api, model=model, **kwargs
+        )
+        content = response["raw"]
+        user_prompt += f"\n\nDocument content:\n<content>\n{content}\n</content>\n\nPlease parse the entire document and return a single JSON instance that conforms to the provided schema."
+        resp_dict = create_response(
+            api=api,
+            model=model,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=kwargs.get("temperature", 0.0),
+            max_tokens=kwargs.get("max_tokens", 1024),
+        )
+        response = resp_dict.get("response", "")
+        response = response.split("```json")[-1].split("```")[0].strip()
+        logger.debug(f"Processing document with response: {response}")
+        return [json.loads(response)]
+
+    responses = []
+    images = convert_doc_to_base64_images(path)
+    for i, (page_num, image) in enumerate(images):
+        resp_dict = create_response(
+            api=api,
+            model=model,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            image_url=image,
+            temperature=kwargs.get("temperature", 0.0),
+            max_tokens=kwargs.get("max_tokens", 1024),
+        )
+
+        response = resp_dict.get("response", "")
+        response = response.split("```json")[-1].split("```")[0].strip()
+        logger.debug(f"Processing page {page_num + 1} with response: {response}")
+        new_dict = json.loads(response)
+        responses.append(new_dict)
+
+    return responses
+
+
+def parse_to_latex(
+    path: str,
+    api: Optional[str] = None,
+    model: str = "gpt-4o-mini",
+    start_page: int = 1,
+    auto_orient: bool = False,
+    expected_total_pages: Optional[int] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    page_callback: Optional[Callable[[int, int, str], None]] = None,
+    **kwargs,
+) -> str:
+    if not api:
+        api = get_api_provider_for_model(model)
+        logger.debug(f"Using API provider: {api}")
+
+    first_prompt = LATEX_FIRST_PAGE_PROMPT
+    middle_prompt = LATEX_MIDDLE_PAGE_PROMPT
+    last_prompt = LATEX_LAST_PAGE_PROMPT
+
+    user_prompt = LATEX_USER_PROMPT
+
+    responses = []
+    images = convert_doc_to_base64_images(path, auto_orient=auto_orient)
+    total_pages = len(images)
+
+    if not 1 <= start_page <= total_pages:
+        raise ValueError(
+            f"start_page must be between 1 and {total_pages}, got {start_page}"
+        )
+    if expected_total_pages is not None and expected_total_pages != total_pages:
+        raise ValueError(
+            "Cannot resume: the current PDF has "
+            f"{total_pages} pages, but the output checkpoint expects "
+            f"{expected_total_pages}."
+        )
+
+    if total_pages == 1:
+        first_prompt += "\n\nWrite \\end{document} to close the document."
+    else:
+        first_prompt += "\n\nDo NOT write \\end{document} yet."
+
+    for i, (page_num, image) in enumerate(images):
+        if page_num + 1 < start_page:
+            continue
+
+        if i == 0:
+            system_prompt = first_prompt
+        elif i == total_pages - 1:
+            system_prompt = last_prompt
+        else:
+            system_prompt = middle_prompt
+
+        system_prompt = (
+            system_prompt
+            + "\n\n"
+            + latex_page_value_id_prompt(page_num + 1, total_pages)
+        )
+
+        resp_dict = create_response(
+            api=api,
+            model=model,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            image_url=image,
+            temperature=kwargs.get("temperature", 0.0),
+            max_tokens=kwargs.get("max_tokens", 1024),
+        )
+        response = resp_dict.get("response", "").strip()
+        response = response.split("```latex")[-1].split("```")[0].strip()
+        logger.debug(f"Processing page {page_num + 1} with response:\n{response}")
+        responses.append(response)
+        if page_callback:
+            page_callback(page_num + 1, total_pages, response)
+        if progress_callback:
+            progress_callback(page_num + 1, total_pages)
+
+    return "\n\n".join(responses)

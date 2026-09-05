@@ -1,0 +1,16 @@
+.git
+.gitignore
+.vscode
+.github
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+dist
+lexoid.egg-info
+work
+docs
+assets
+examples/inputs/stress_test

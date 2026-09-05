@@ -1,0 +1,30 @@
+# Lexoid 是 CLI 工具，不是常驻服务：
+# 原配置里的 ports: 8000 和 restart: unless-stopped 会让容器
+# 启动后立刻退出再被无限重启（镜像里没有任何 server），已移除。
+services:
+  lexoid:
+    build:
+      context: .
+      args:
+        # 国内网络：在 shell 里 export 这些变量即可切到镜像源，
+        # 例如 export BASE_IMAGE=docker.1ms.run/library/python:3.10-slim
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.10-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    image: lexoid:local
+    # 没有该镜像时构建，而不是去 Docker Hub 拉一个不存在的 lexoid 仓库
+    pull_policy: never
+    env_file:
+      - .env
+    environment:
+      # 运行时调用 OpenAI / Gemini API 需要代理时，在 shell 里 export：
+      #   export HTTPS_PROXY=http://host.docker.internal:7890
+      # 注意主机地址必须是 host.docker.internal，不是 127.0.0.1
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
+    volumes:
+      # 把 PDF 放进 ./work，产出的 .tex 也会出现在 ./work
+      - ./work:/work
+    working_dir: /work

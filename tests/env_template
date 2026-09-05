@@ -1,0 +1,10 @@
+DEFAULT_LLM = "gemini-3.5-flash"
+GOOGLE_API_KEY = ""
+OPENAI_API_KEY = ""
+HUGGINGFACEHUB_API_TOKEN = ""
+TOGETHER_API_KEY = ""
+DEEPSEEK_API_KEY = ""
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+MINIMAX_API_KEY = ""
+# 中国大陆可改为 https://api.minimaxi.com/v1
+MINIMAX_BASE_URL = "https://api.minimax.io/v1"
