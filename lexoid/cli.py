@@ -21,7 +21,7 @@ from lexoid.core.latex_template import (
     fill_file as fill_latex_template_file,
     organize_file as organize_latex_file,
 )
-from lexoid.core.utils import DEFAULT_LLM
+from lexoid.core.prompt_templates import LATEX_CHECKBOX_FIELD_COMMAND
 
 
 API_KEY_ENV_VARS = {
@@ -39,18 +39,13 @@ API_KEY_ENV_VARS = {
     "local": None,  # Local models don't require an API key
 }
 API_PROVIDER_CHOICES = [k for k in API_KEY_ENV_VARS.keys() if k != "local"]
-DEFAULT_SCHEMA_LLM = "gpt-4o-mini"
+from lexoid.core.model_config import resolve_model
+
 LATEX_PAGE_CHECKPOINT_RE = re.compile(
-    r"(?m)^% LEXOID_PAGE_COMPLETED: (?P<page>\d+)/(?P<total>\d+)\s*$"
+    r"(?m)^\s*% LEXOID_PAGE_COMPLETED:\s*(?P<page>\d+)/(?P<total>\d+)\s*$"
 )
 LATEX_HANDWRITTEN_COMMAND = r"\newcommand{\handwritten}[1]{#1}"
 LATEX_FIELD_VALUE_COMMAND = r"\newcommand{\fieldvalue}[1]{#1}"
-LATEX_CHECKBOX_FIELD_COMMAND = (
-    r"\newcommand{\checkboxfield}[1]{\ifstrequal{#1}{checked}{☑}"
-    r"{\ifstrequal{#1}{unclear}{?}{☐}}}"
-)
-
-
 def timestamped_status(message: str) -> str:
     """Prefix a user-facing status message with a local ISO-8601 timestamp."""
     timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -232,6 +227,12 @@ def write_latex_page(
     output_path: Path, page: int, total_pages: int, page_content: str
 ) -> None:
     """Atomically persist one completed page without risking the previous output."""
+    markers = [(int(match["page"]), int(match["total"]))
+               for match in LATEX_PAGE_CHECKPOINT_RE.finditer(page_content)]
+    if markers and markers != [(page, total_pages)]:
+        raise click.ClickException("Page content has an incorrect or duplicate checkpoint.")
+    # This writer owns durable checkpoints, including those supplied by recognizers.
+    page_content = LATEX_PAGE_CHECKPOINT_RE.sub("", page_content).rstrip()
     if page == 1:
         existing_content = ""
     else:
@@ -365,8 +366,8 @@ def app():
 @click.option(
     "--model",
     "-m",
-    default=DEFAULT_LLM,
-    help=f"LLM model to use (default: {DEFAULT_LLM})",
+    default=None,
+    help="LLM model (environment: DEFAULT_LLM; local API: DEFAULT_LOCAL_LM)",
 )
 @click.option(
     "--pages-per-split",
@@ -429,6 +430,7 @@ def parse(
         api_provider = None
         if parser_enum == ParserType.LLM_PARSE:
             try:
+                model = resolve_model("DEFAULT_LOCAL_LM" if api == "local" else "DEFAULT_LLM", model)
                 api_provider = resolve_api_provider(model, api)
             except ValueError as e:
                 raise click.ClickException(str(e))
@@ -513,8 +515,8 @@ def parse(
 @click.option(
     "--model",
     "-m",
-    default=DEFAULT_SCHEMA_LLM,
-    help=f"LLM model to use (default: {DEFAULT_SCHEMA_LLM})",
+    default=None,
+    help="LLM model (environment: LEXOID_SCHEMA_MODEL)",
 )
 @click.option(
     "--api",
@@ -558,6 +560,7 @@ def schema(
         schema_dict = load_schema_definition(schema)
 
         try:
+            model = resolve_model("LEXOID_SCHEMA_MODEL", model)
             api = resolve_api_provider(model, api)
         except ValueError as e:
             raise click.ClickException(str(e))
@@ -613,8 +616,8 @@ def schema(
 @click.option(
     "--model",
     "-m",
-    default=DEFAULT_SCHEMA_LLM,
-    help=f"LLM model to use (default: {DEFAULT_SCHEMA_LLM})",
+    default=None,
+    help="LLM model (environment: LEXOID_MODEL)",
 )
 @click.option(
     "--api",
@@ -646,7 +649,14 @@ def schema(
     is_flag=True,
     help="Enable verbose logging",
 )
-def latex(input, output, model, api, start_page, organize_values, auto_orient, verbose):
+@click.option("--ocr", type=click.Choice(["none", "paddleocr"]), default="none")
+@click.option("--render-dpi", type=click.IntRange(72, 600), default=240)
+@click.option("--evidence-output", type=click.Path(), default=None)
+@click.option("--cache-dir", type=click.Path(), default=None)
+@click.option("--vision-concurrency", type=click.IntRange(1, 32), default=4)
+@click.option("--resume/--no-resume", default=True)
+def latex(input, output, model, api, start_page, organize_values, auto_orient, verbose,
+          ocr, render_dpi, evidence_output, cache_dir, vision_concurrency, resume):
     """Convert document to LaTeX format."""
     configure_logging(verbose)
 
@@ -654,6 +664,11 @@ def latex(input, output, model, api, start_page, organize_values, auto_orient, v
         input_path = validate_input_file(input)
         output_path = validate_output_path(output)
         checkpoint = None
+        if evidence_output and output_path is None:
+            raise click.UsageError("--evidence-output requires --output")
+        if ocr == "paddleocr" and output_path:
+            evidence_output = evidence_output or str(output_path.with_suffix(".recognition.json"))
+            cache_dir = cache_dir or str(output_path.parent / ".recognition-cache")
 
         if start_page > 1:
             if output_path is None:
@@ -673,6 +688,7 @@ def latex(input, output, model, api, start_page, organize_values, auto_orient, v
             raise click.UsageError("--organize-values requires --output")
 
         try:
+            model = resolve_model("LEXOID_MODEL", model)
             api = resolve_api_provider(model, api)
         except ValueError as e:
             raise click.ClickException(str(e))
@@ -687,6 +703,8 @@ def latex(input, output, model, api, start_page, organize_values, auto_orient, v
                 model=model,
                 start_page=start_page,
                 auto_orient=auto_orient,
+                ocr=ocr, render_dpi=render_dpi, evidence_output=evidence_output,
+                cache_dir=cache_dir, vision_concurrency=vision_concurrency, resume=resume,
                 expected_total_pages=checkpoint[1] if checkpoint else None,
                 page_callback=(
                     lambda page, total, content: (

@@ -133,7 +133,7 @@ parse_with_schema
 parse_to_latex
 ^^^^^^^^^^^^^^
 
-.. py:function:: lexoid.api.parse_to_latex(path: str, api: Optional[str] = None, model: str = "gpt-4o-mini", start_page: int = 1, expected_total_pages: Optional[int] = None, progress_callback: Optional[Callable[[int, int], None]] = None, page_callback: Optional[Callable[[int, int, str], None]] = None, **kwargs) -> str
+.. py:function:: lexoid.api.parse_to_latex(path: str, api: Optional[str] = None, model: str = "gpt-6-astra", start_page: int = 1, expected_total_pages: Optional[int] = None, progress_callback: Optional[Callable[[int, int], None]] = None, page_callback: Optional[Callable[[int, int, str], None]] = None, ocr: str = "none", render_dpi: int = 240, evidence_output: Optional[str] = None, cache_dir: Optional[str] = None, vision_concurrency: int = 4, resume: bool = True, **kwargs) -> str
 
    Convert a document (PDF or image) into a self-contained LaTeX string by
    feeding each rendered page to a vision-capable LLM. The first page emits
@@ -150,6 +150,12 @@ parse_to_latex
    :param expected_total_pages: Optional page-count guard for resumed conversions.
    :param progress_callback: Optional callback invoked as ``callback(completed_page, total_pages)`` after each page completes.
    :param page_callback: Optional callback invoked as ``callback(page, total_pages, latex_content)`` after each page completes.
+   :param ocr: ``none`` preserves the legacy path; ``paddleocr`` enables hybrid PDF recognition.
+   :param render_dpi: Initial hybrid rendering resolution; defaults to 240 DPI.
+   :param evidence_output: Optional path for the document's ``recognition/v1`` evidence JSON.
+   :param cache_dir: Directory for independently resumable page stages.
+   :param vision_concurrency: Maximum concurrent page vision calls; defaults to four.
+   :param resume: Reuse cache entries only after validating the input/configuration key and page contract.
    :param kwargs: Additional keyword arguments forwarded to the LLM call (e.g., ``temperature``, ``max_tokens``).
    :return: The concatenated LaTeX source as a single string.
 

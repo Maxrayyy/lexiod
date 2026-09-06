@@ -31,11 +31,11 @@ def run_lexoid_module(*args):
         ),
         (
             "schema",
-            ["Extract structured data", "--input", "--schema", "gpt-4o-mini", "ollama"],
+            ["Extract structured data", "--input", "--schema", "LEXOID_SCHEMA_MODEL", "ollama"],
         ),
         (
             "latex",
-            ["Convert document", "--input", "gpt-4o-mini", "ollama"],
+            ["Convert document", "--input", "LEXOID_MODEL", "ollama"],
         ),
     ],
 )

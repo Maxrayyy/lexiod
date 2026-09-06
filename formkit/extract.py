@@ -16,6 +16,7 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from lexoid.core.model_config import resolve_model
 
 from . import prompts
 from .llm import LLMError, vision_json
@@ -39,7 +40,6 @@ from .schema import (
     normalize_label,
 )
 
-DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_CONFIDENCE_THRESHOLD = 0.75
 
 
@@ -187,7 +187,7 @@ def reread_field(page_img, f: Field, model: str, api: Optional[str],
 
 def extract(
     pdf_path: str,
-    model: str = DEFAULT_MODEL,
+    model: Optional[str] = None,
     api: Optional[str] = None,
     threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
     reread: bool = True,
@@ -195,6 +195,7 @@ def extract(
     dpi: int = 200,
     progress=lambda msg: None,
 ) -> Dict[str, Any]:
+    model = resolve_model("FORMKIT_MODEL", model)
     with open(pdf_path, "rb") as fh:
         pdf_bytes = fh.read()
     doc_id = doc_id_for(pdf_bytes)

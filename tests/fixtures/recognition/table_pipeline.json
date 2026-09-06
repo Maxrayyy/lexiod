@@ -1,0 +1,8 @@
+{
+  "table_res_list": [
+    {
+      "pred_html": "<table><tr><td colspan=\"2\">Batch</td></tr><tr><td>A</td><td>B</td></tr></table>",
+      "cell_box_list": [[0, 0, 180, 20], [0, 20, 90, 40], [90, 20, 180, 40]]
+    }
+  ]
+}

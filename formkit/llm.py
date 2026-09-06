@@ -128,6 +128,8 @@ def _call_openai(model: str, system: str, user: str, image_data_uri: str,
         "messages": messages,
         "response_format": {"type": "json_object"},
     }
+    from lexoid.core.model_config import completion_options
+    params.update(completion_options(model, max_tokens, temperature))
     try:
         resp = client.chat.completions.create(**params)
     except Exception as e:

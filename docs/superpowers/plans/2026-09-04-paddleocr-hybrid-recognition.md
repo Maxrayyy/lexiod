@@ -21,6 +21,25 @@ OpenAI-compatible vision APIs, pytest, argparse/click, Docker Compose, XeLaTeX.
 
 ## Global Constraints
 
+- User update (2026-09-05): recognition quality and conversion performance take
+  priority. The host has 16 GB RAM and Docker has about 9.48 GB available. Keep
+  initial/retry DPI and avoid duplicate model work before reducing concurrency.
+  The layout adapter now calls PPStructureV3's `PP-DocLayout_plus-L` through the
+  public `LayoutDetection` API, avoiding PPStructureV3's second complete OCR
+  pipeline. Worker memory is capped at 8 GB; global Docker allocation is unchanged.
+- User update (2026-09-05): implement in `paddleocr-hybrid-refactor/`. Mirror every
+  `Downloads/U1|U2|.../<relative>/<name>.pdf` to
+  `data/U1|U2|.../<relative>/tex/<name>.tex` (recognition) and
+  `data/U1|U2|.../<relative>/optimized/<name>.optimized.tex` (optimization). Retain both TeX
+  files and associated evidence/reconciliation artifacts. Do not delete raw TeX
+  on publication. Existing output files require input/config fingerprint checks
+  before reuse. Preserve every intermediate category directory, including
+  `U1/批次数据/<编号>` and `U2/批次/<编号>`. Group raw and optimized TeX in separate
+  directories inside each numbered source directory.
+- User update (2026-09-05): use `gpt-6-astra` for vision, field reconciliation,
+  and difficult targeted repairs; use `gpt-5.6-sol` for semantic naming and
+  ordinary optimization. Rebuild containers from refactor after implementation.
+
 - Do not stage or commit any file. The user has permanently disabled Git commits for
   this work.
 - Preserve unrelated working-tree changes made by the user or another Codex window.
@@ -235,6 +254,12 @@ Expected: all tests pass.
 ---
 
 ### Task 3: Paddle Text, Layout, Table, and VL Adapters
+
+Implementation update: use `LayoutDetection` with `PP-DocLayout_plus-L` instead
+of creating the whole `PPStructureV3` pipeline. The latter exceeded 8 GB during
+real CPU inference because it also ran full-resolution server OCR. The text,
+table, and on-demand VL stages remain separate. ARM64 static predictors disable
+the crashing new IR path; VL uses the provider's JSON conversion interface.
 
 **Files:**
 - Create: `lexoid/core/recognition/paddle.py`

@@ -20,9 +20,15 @@ def _default_document_factory(path: str) -> Any:
 
 
 def _default_orientation_normalizer(image: Image.Image) -> Image.Image:
-    from lexoid.core.conversion_utils import normalize_document_orientation
+    from lexoid.core.conversion_utils import detect_document_orientation
 
-    return normalize_document_orientation(image)
+    rotation, confidence = detect_document_orientation(image)
+    if rotation not in (0, 90, 180, 270):
+        raise ValueError(f"Unsupported document orientation: {rotation}")
+    rotation = rotation if confidence >= 0.80 else 0
+    image = image.rotate(rotation, expand=True) if rotation else image.copy()
+    image.info["lexoid_rotation"] = rotation
+    return image
 
 
 def render_pdf_page_from_document(
@@ -53,6 +59,7 @@ def render_pdf_page_from_document(
         width=width,
         height=height,
         image=image,
+        rotation=image.info.get("lexoid_rotation", 0),
     )
 
 

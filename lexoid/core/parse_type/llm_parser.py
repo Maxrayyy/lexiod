@@ -21,8 +21,6 @@ from lexoid.core.prompt_templates import (
     PARSER_PROMPT,
 )
 from lexoid.core.utils import (
-    DEFAULT_LLM,
-    DEFAULT_LOCAL_LM,
     DEFAULT_MAX_IMAGE_DIMENSION,
     OLLAMA_BASE_URL,
     OLLAMA_TIMEOUT,
@@ -31,6 +29,8 @@ from lexoid.core.utils import (
 )
 from loguru import logger
 from requests.exceptions import HTTPError
+from lexoid.core.model_config import completion_options, resolve_model
+from lexoid.core.model_telemetry import CALL_CONTEXT, trace_response
 
 
 _ANTHROPIC_MODEL_RE = re.compile(
@@ -96,14 +96,14 @@ def parse_llm_doc(path: str, **kwargs) -> Dict:
         raise ValueError(
             f"Unsupported file type: {mime_type}. Only PDF, image, and audio files are supported for LLM_PARSE."
         )
+    variable = "DEFAULT_LOCAL_LM" if kwargs.get("api_provider") == "local" else "DEFAULT_LLM"
+    model = resolve_model(variable, kwargs.get("model"))
+    kwargs["model"] = model
     if "api_provider" in kwargs:
         if kwargs["api_provider"] == "local":
             return parse_with_local_model(path, **kwargs)
         elif kwargs["api_provider"]:
             return parse_with_api(path, api=kwargs["api_provider"], **kwargs)
-
-    model = kwargs.get("model", DEFAULT_LLM)
-    kwargs["model"] = model
 
     api_provider = get_api_provider_for_model(model)
 
@@ -371,7 +371,8 @@ def doctags_to_markdown_and_bboxes(
 
 
 def parse_with_local_model(path: str, **kwargs) -> Dict:
-    model_name = kwargs.get("model", DEFAULT_LOCAL_LM)
+    model_name = resolve_model("DEFAULT_LOCAL_LM", kwargs.get("model"))
+    kwargs["model"] = model_name
     if model_name.lower().startswith("paddlepaddle/paddleocr-vl"):
         return parse_with_paddleocr_vl(path, **kwargs)
     return parse_with_docling(path, **kwargs)
@@ -383,7 +384,7 @@ def parse_with_docling(path: str, **kwargs) -> Dict:
     from PIL import Image
     from transformers import AutoModelForVision2Seq, AutoProcessor
 
-    model_name = kwargs.get("model", DEFAULT_LOCAL_LM)
+    model_name = resolve_model("DEFAULT_LOCAL_LM", kwargs.get("model"))
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     processor = AutoProcessor.from_pretrained(model_name)
@@ -696,6 +697,7 @@ def get_messages(
     return messages
 
 
+@trace_response
 def create_response(
     api: str,
     model: str,
@@ -716,7 +718,7 @@ def create_response(
 
     # Initialize appropriate client
     clients = {
-        "openai": lambda: OpenAI(),
+        "openai": lambda: OpenAI(**({"max_retries": 0} if CALL_CONTEXT.get() else {})),
         "huggingface": lambda: InferenceClient(
             token=os.environ["HUGGINGFACEHUB_API_TOKEN"]
         ),
@@ -830,6 +832,7 @@ def create_response(
             response_text = getattr(response.content[0], "text", "") or ""
         return {
             "response": response_text,
+            "usage_raw": response.usage.model_dump() if hasattr(response.usage, "model_dump") else None,
             "usage": {
                 "input_tokens": response.usage.input_tokens,
                 "output_tokens": response.usage.output_tokens,
@@ -846,6 +849,8 @@ def create_response(
         "model": model,
         "messages": messages,
     }
+    if api == "openai":
+        completion_params.update(completion_options(model, max_tokens, temperature))
 
     # Get completion from selected API
     response = client.chat.completions.create(**completion_params)
@@ -856,6 +861,10 @@ def create_response(
 
     return {
         "response": page_text,
+        "response_id": getattr(response, "id", None),
+        "finish_reason": getattr(response.choices[0], "finish_reason", None),
+        "usage_raw": token_usage.model_dump() if hasattr(token_usage, "model_dump") else None,
+        "usage_missing": token_usage is None,
         "usage": {
             "input_tokens": getattr(token_usage, "prompt_tokens", 0),
             "output_tokens": getattr(token_usage, "completion_tokens", 0),

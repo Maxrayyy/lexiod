@@ -4,6 +4,7 @@ version = "0.1.23-dev"
 description = ""
 authors = []
 readme = "README.md"
+packages = [{ include = "lexoid" }, { include = "formkit" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -17,6 +18,7 @@ bs4 = "^0.0.2"
 markdownify = "^0.14.1"
 opencv-python = "^4.10.0.84"
 pypdfium2 = "^4.30.0"
+pylatexenc = ">=2.10,<3"
 markdown = "^3.7"
 python-dotenv = "^1.0.0"
 loguru = "^0.7.2"

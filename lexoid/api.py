@@ -7,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 from enum import Enum
 from functools import wraps
 from glob import glob
+from pathlib import Path
 from time import time
 from typing import Callable, Dict, List, Optional, Type, Union
 
@@ -29,7 +30,6 @@ from lexoid.core.prompt_templates import (
     latex_page_value_id_prompt,
 )
 from lexoid.core.utils import (
-    DEFAULT_LLM,
     DEFAULT_MAX_IMAGE_DIMENSION,
     DEFAULT_STATIC_FRAMEWORK,
     LEXOID_STORAGE_DIR,
@@ -47,6 +47,7 @@ from lexoid.core.utils import (
     split_pdf,
 )
 from loguru import logger
+from lexoid.core.model_config import resolve_model
 
 
 class ParserType(Enum):
@@ -406,7 +407,7 @@ def parse(
             else:
                 raise ValueError(f"Unsupported API cost value: {api_cost_mapping}.")
 
-            api_cost = api_cost_mapping.get(kwargs.get("model", DEFAULT_LLM), None)
+            api_cost = api_cost_mapping.get(kwargs.get("model") or os.getenv("DEFAULT_LLM"), None)
             if api_cost:
                 token_usage = result["token_usage"]
                 token_cost = {
@@ -460,7 +461,7 @@ def parse_with_schema(
     path: str,
     schema: Union[Dict, Type],
     api: Optional[str] = None,
-    model: str = "gpt-4o-mini",
+    model: Optional[str] = None,
     example_schema: Optional[Dict] = None,
     alternate_keys: Optional[Dict] = None,
     fill_single_schema: bool = False,
@@ -481,6 +482,7 @@ def parse_with_schema(
     Returns:
         List[Dict]: List of dictionaries, one for each page, each conforming to the provided schema.
     """
+    model = resolve_model("LEXOID_SCHEMA_MODEL", model)
     if example_schema is None:
         example_schema = {}
     if alternate_keys is None:
@@ -576,14 +578,56 @@ def parse_with_schema(
 def parse_to_latex(
     path: str,
     api: Optional[str] = None,
-    model: str = "gpt-4o-mini",
+    model: Optional[str] = None,
     start_page: int = 1,
     auto_orient: bool = False,
     expected_total_pages: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     page_callback: Optional[Callable[[int, int, str], None]] = None,
+    ocr: str = "none",
+    render_dpi: int = 240,
+    evidence_output: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    vision_concurrency: int = 4,
+    resume: bool = True,
     **kwargs,
 ) -> str:
+    if ocr not in ("none", "paddleocr"):
+        raise ValueError(f"Unsupported OCR mode: {ocr}")
+    model = resolve_model("LEXOID_MODEL", model)
+    if ocr == "paddleocr" or evidence_output:
+        from lexoid.core.recognition.cache import _atomic_write
+        from lexoid.core.recognition.models import RecognitionConfig
+        from lexoid.core.recognition.service import DocumentRecognizer
+        from lexoid.core.recognition.vision import PROMPT_VERSION
+
+        if Path(path).suffix.lower() != ".pdf":
+            raise ValueError("Recognition evidence requires a PDF input")
+        config = RecognitionConfig(
+            ocr=ocr, device=kwargs.get("device", "cpu"), initial_render_dpi=render_dpi,
+            retry_crop_dpi=max(480, render_dpi), vision_concurrency=vision_concurrency,
+            min_output_tokens=8192 if ocr == "none" else 2048,
+            enable_vl_fallback=ocr == "paddleocr" and kwargs.get("enable_vl_fallback", True),
+        )
+        recognizer = DocumentRecognizer(
+            model=model, api=api or get_api_provider_for_model(model), config=config,
+            cache_dir=cache_dir, resume=resume, auto_orient=auto_orient,
+        )
+        def on_page(page, total, text):
+            if page_callback:
+                page_callback(page, total, text)
+            if progress_callback:
+                progress_callback(page, total)
+        results = recognizer.recognize(Path(path), start_page=start_page,
+            page_callback=on_page, expected_total_pages=expected_total_pages)
+        if evidence_output:
+            payload = {"schema": "recognition/v1", "pipeline_version": PROMPT_VERSION,
+                       "document_sha256": recognizer.document_sha256,
+                       "model": model, "ocr": ocr, "auto_orient": auto_orient,
+                       "pages": [result.evidence.to_dict() for result in results]}
+            _atomic_write(Path(evidence_output),
+                (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        return "\n\n".join(result.latex for result in results if result.page >= start_page)
     if not api:
         api = get_api_provider_for_model(model)
         logger.debug(f"Using API provider: {api}")
@@ -638,8 +682,10 @@ def parse_to_latex(
             system_prompt=system_prompt,
             image_url=image,
             temperature=kwargs.get("temperature", 0.0),
-            max_tokens=kwargs.get("max_tokens", 1024),
+            max_tokens=kwargs.get("max_tokens", 8192),
         )
+        if resp_dict.get("finish_reason") == "length":
+            raise ValueError(f"Truncated LaTeX response for page {page_num + 1}")
         response = resp_dict.get("response", "").strip()
         response = response.split("```latex")[-1].split("```")[0].strip()
         logger.debug(f"Processing page {page_num + 1} with response:\n{response}")

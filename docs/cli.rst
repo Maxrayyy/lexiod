@@ -88,7 +88,9 @@ Options:
 
     lexoid latex --input document.pdf
     lexoid latex --input document.pdf --output output.tex
-    lexoid latex --input document.pdf --model gpt-4o
+    lexoid latex --input document.pdf --model gpt-6-astra
+    lexoid latex --input document.pdf --output raw.tex --ocr paddleocr \
+      --render-dpi 240 --evidence-output raw.recognition.json --auto-orient
 
 The command writes page-level progress to stderr after every completed page,
 for example: ``Progress: page 3/10 completed``.
@@ -101,11 +103,24 @@ pages.
 
 Options:
 
-* ``--model, -m``: LLM model. Default: ``gpt-4o-mini``.
+* ``--model, -m``: LLM model. Default: ``gpt-6-astra``.
 * ``--api``: API provider (auto-detected from model name if omitted).
 * ``--start-page``: Resume at this 1-based page. Default: ``1``.
+* ``--ocr``: ``none`` (default, legacy vision path) or ``paddleocr`` (hybrid PDF path).
+* ``--render-dpi``: Initial hybrid page DPI. Default: ``240``.
+* ``--evidence-output``: Hybrid JSON evidence path. With ``--output``, defaults
+  to ``<output-stem>.recognition.json``.
+* ``--cache-dir``: Directory for resumable render, OCR, table, and draft caches.
+* ``--vision-concurrency``: Maximum concurrent vision calls. Default: ``4``.
+* ``--resume / --no-resume``: Reuse validated hybrid stage caches. Default: enabled.
+* ``--auto-orient / --no-auto-orient``: Normalize page orientation before recognition.
 * ``--organize-values``: After conversion, create ``.template.tex`` and an
   editable ``.values.json`` manifest.
+
+The combined runtime uses CPU inference on the macOS Docker host. Paddle
+weights download on demand and persist in the configured model-cache volume.
+PaddleOCR-VL is used only for unresolved table topology. The vision model
+remains responsible for final page TeX; evidence JSON is kept separately.
 
 ``lexoid latex-template`` and ``lexoid latex-fill``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

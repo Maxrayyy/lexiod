@@ -12,6 +12,7 @@ import docx2pdf
 import numpy as np
 import pypdfium2 as pdfium
 from lexoid.core.utils import DEFAULT_MAX_IMAGE_DIMENSION
+from lexoid.core.paddle_runtime import paddle_runtime_options
 from loguru import logger
 from PIL import Image
 
@@ -25,14 +26,17 @@ def _get_doc_orientation_classifier():
     if _DOC_ORIENTATION_CLASSIFIER is None:
         from paddleocr import DocImgOrientationClassification
 
-        _DOC_ORIENTATION_CLASSIFIER = DocImgOrientationClassification()
+        _DOC_ORIENTATION_CLASSIFIER = DocImgOrientationClassification(
+            **paddle_runtime_options(),
+        )
     return _DOC_ORIENTATION_CLASSIFIER
 
 
 def detect_document_orientation(image: Image.Image) -> Tuple[int, float]:
     """Return the page's clockwise orientation and classifier confidence."""
     classifier = _get_doc_orientation_classifier()
-    result = next(iter(classifier.predict(np.asarray(image.convert("RGB")))))
+    pixels = np.asarray(image.convert("RGB"))[:, :, ::-1].copy()
+    result = next(iter(classifier.predict(pixels)))
     prediction = dict(result)
     orientation = int(prediction["label_names"][0])
     confidence = float(prediction["scores"][0])

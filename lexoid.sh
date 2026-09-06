@@ -68,7 +68,7 @@ case "${1:-}" in
         echo ""
         echo "文件路径用本机绝对路径，脚本自动挂载。"
         echo "示例:"
-        echo "  ./lexoid.sh latex -i ~/Downloads/input.pdf -o ~/Downloads/output.tex --model gpt-5.6-luna"
+        echo "  ./lexoid.sh latex -i ~/Downloads/input.pdf -o ~/Downloads/output.tex"
         exit 0
         ;;
 esac
@@ -164,7 +164,7 @@ while [[ $i -lt $nargs ]]; do
             CONTAINER_ARGS+=("$arg")
             ;;
         *)
-            # 其他参数直接透传（--model, gpt-5.6-luna, --start-page, etc.）
+            # 其他参数直接透传（--model、--start-page 等）。
             CONTAINER_ARGS+=("$arg")
             ;;
     esac

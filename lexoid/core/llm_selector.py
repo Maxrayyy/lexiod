@@ -14,6 +14,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
+from lexoid.core.model_config import resolve_model
 
 from lexoid.core.conversion_utils import (
     base64_to_np_array,
@@ -131,8 +132,9 @@ def extract_image_embedding(
 ) -> np.ndarray:
     """Extract embedding using CLIP, converting PDFs to images if needed."""
     if model is None or processor is None:
-        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        model_name = resolve_model("LEXOID_CLIP_MODEL")
+        model = CLIPModel.from_pretrained(model_name).to(device)
+        processor = CLIPProcessor.from_pretrained(model_name)
 
     # Convert document to images
     page_data = convert_doc_to_base64_images(
@@ -223,11 +225,12 @@ class DocumentRankedLLMSelector:
         self.embeddings = []
 
         if self.use_image_embeddings:
-            self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(
+            model_name = resolve_model("LEXOID_CLIP_MODEL")
+            self.model = CLIPModel.from_pretrained(model_name).to(
                 self.device
             )
             self.processor = CLIPProcessor.from_pretrained(
-                "openai/clip-vit-base-patch32"
+                model_name
             )
 
         for base_name, _ in tqdm(grouped):

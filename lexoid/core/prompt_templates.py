@@ -76,6 +76,14 @@ Convert the following document to markdown.
 Ensure accurate representation of all content, including tables and visual elements, per your instructions.
 """
 
+LATEX_CHECKBOX_FIELD_COMMAND = r"""\newcommand{\lexoidcheckboxbox}[1]{%
+  \begingroup\setlength{\fboxsep}{0.15ex}%
+  \fbox{\rule{0pt}{1.25ex}\makebox[1.25ex][c]{\scriptsize\sffamily #1}}%
+  \endgroup}
+\newcommand{\checkboxfield}[1]{%
+  \ifstrequal{#1}{checked}{\lexoidcheckboxbox{\ensuremath{\checkmark}}}{%
+    \ifstrequal{#1}{unclear}{\lexoidcheckboxbox{?}}{\lexoidcheckboxbox{}}}}"""
+
 INSTRUCTIONS_ADD_PG_BREAK = "Insert a `<page-break>` tag between the content of each page to maintain the original page structure."
 
 LLAMA_PARSER_PROMPT = """\
@@ -111,19 +119,27 @@ You are converting ONLY the CURRENT page of a PDF into LaTeX.
   * Emit one marker and wrapper per field. For a handwritten value, nest the handwriting wrapper as `\fieldvalue{\handwritten{...}}` and include both the `% #FIELD_VALUE` and `% #HANDWRITTEN` comment lines.
   * For every visible checkbox, wrap its editable state as `\fieldvalue{\checkboxfield{checked}}`, `\fieldvalue{\checkboxfield{unchecked}}`, or `\fieldvalue{\checkboxfield{unclear}}`. Keep the printed option label outside the wrapper. A checkbox is one logical value and receives its own `% #VALUE_ID` and `% #FIELD_VALUE` lines.
   * If a checkbox mark itself is handwritten, use `\fieldvalue{\handwritten{\checkboxfield{checked}}}` (or `unchecked`/`unclear`) and include `% #HANDWRITTEN` without allocating another ID.
+- Preserve printed fill-in underlines, including lines underneath handwritten values:
+  * Keep the visible rule as layout OUTSIDE the editable value, using `\underline{\makebox[2cm][c]{\fieldvalue{\handwritten{1632504}}}}` for an underlined incubator ID, for example. Put the field metadata comments immediately before the outer `\underline` command. The `\fieldvalue` payload must contain only the value and its optional handwriting wrapper, never line widths or layout commands.
+  * Choose each box width from the visible source rule, not from the recognized text length. The 2cm example is not a default for all fields. Leave enough room for the value at the chosen font size and keep the complete row within `\linewidth`; do not let centered values overlap neighboring labels or units.
+  * Preserve separate short rules for the year, month, day, hour and minute blanks of test dates, incubation start/end times and report dates. Keep printed 年/月/日/时/分/至, labels, punctuation and units outside each underline unless the source rule visibly includes them. Keep fields on the same visual row together; do not insert blank lines between annotations.
+  * Preserve an unfilled source rule as `\underline{\makebox[<source width>][c]{\strut}}`; do not invent a value. Do not add underlines to fields without a visible source rule, checkbox states, printed temperatures, test standards or table borders. Preserve existing solid table rules as table structure.
 - Handwritten-entry annotation is MANDATORY:
   * Identify every handwritten entry independently, including names, dates, numbers, units, signatures, corrections, check marks with handwritten labels, and handwriting inside table cells or form fields.
   * Immediately BEFORE the LaTeX element containing each handwritten entry, add a separate source-comment line using exactly: `% #HANDWRITTEN: <verbatim recognized value>`.
   * Wrap only the handwritten value itself with `\handwritten{...}`. Preserve the surrounding printed label or table structure normally.
   * Never combine several handwritten fields into one marker. Emit one `% #HANDWRITTEN` comment and one `\handwritten{...}` wrapper for every individual handwritten value.
+  * Do not insert a blank line before field metadata when the field continues the same visual line. Use an explicit `\\` only where the source starts a new line.
   * If handwriting is uncertain or illegible, use `% #TODO #HANDWRITTEN: <best guess or illegible>; <short reason>` and still wrap the best transcription with `\handwritten{...}`. Do not silently omit it or replace it with unmarked plain text.
   * These markers are LaTeX source comments for later review. Keep each marker on its own line so it cannot comment out table separators, row endings, or other LaTeX commands.
-- Use \section{}, \subsection{}, \subsubsection{} for headings based on visible hierarchy cues.
+- Use only unnumbered \section*{}, \subsection*{}, \subsubsection*{} for genuine
+  document headings. Never invent a section number. On scanned forms and cover
+  sheets, prefer explicit centered bold text because section commands alter spacing.
 - Use \textbf{}, \textit{}, \underline{} only if clearly visible.
 - Lists: \begin{itemize}/\begin{enumerate} to match bullets/numbering seen on THIS page.
 - Math: $...$ for inline, \begin{equation}...\end{equation} for display math present on THIS page.
 - Figures: if a filename is available, use \includegraphics[width=\linewidth]{<filename>}; otherwise add a % TODO placeholder.
-- Tables: prefer the SyncTeX-safe `tabular` environment with explicit `p{...}` columns. Choose widths whose total, including `\tabcolsep` and rules, fits within `\linewidth`. Use `tabularx` only when the layout cannot be represented accurately with static `tabular` widths; treat it as a last-resort intermediate form. If wide, first try `\small`; use `\resizebox{\textwidth}{!}{...}` only if essential.
+- Tables: prefer the SyncTeX-safe `tabular` environment with explicit `p{...}` columns. Choose widths whose total, including `\tabcolsep` and rules, fits within `\linewidth`. Preserve visible cell boundaries and keep fields whose bounding boxes share a visual row in the same LaTeX row. Separate consecutive tables with an explicit `\par\noindent`; never let two full-width tables share one paragraph. Use `tabularx` only when the layout cannot be represented accurately with static `tabular` widths; treat it as a last-resort intermediate form. If wide, first try `\small`; use `\resizebox{\textwidth}{!}{...}` only if essential.
 Render only rows visible on THIS page; add % TODO if it’s a continuation. Good practices is to use RaggedRight and multicolumn if necessary and present in the image given. 
 - Footnotes: use \footnote{} only if both the marker and the footnote text are visible on THIS page.
 - References: only if a references/bibliography section is visible on THIS page; use \begin{thebibliography}{99} ... \end{thebibliography} for entries visible here.
@@ -132,10 +148,12 @@ Render only rows visible on THIS page; add % TODO if it’s a continuation. Good
 """
 
 
-def latex_page_value_id_prompt(page_number: int, total_pages: int) -> str:
+def latex_page_value_id_prompt(page_number: int, total_pages: int, *, standalone_fieldvalues: bool = False) -> str:
     """Return deterministic value-ID instructions for one PDF page."""
 
     page_prefix = f"LEX-P{page_number:04d}"
+    standalone_wrapper = (r"\fieldvalue{\handwritten{...}}" if standalone_fieldvalues
+                          else r"\handwritten{...}")
     return rf"""
 CURRENT PAGE IDENTITY (MANDATORY):
 - This is physical PDF page {page_number} of {total_pages}.
@@ -149,7 +167,7 @@ CURRENT PAGE IDENTITY (MANDATORY):
   `% #HANDWRITTEN: <recognized value>`
   `\fieldvalue{{\handwritten{{<recognized value>}}}}`
 - For a checkbox, emit one shared ID and use `\fieldvalue{{\checkboxfield{{checked|unchecked|unclear}}}}`; keep its printed option label outside the wrapper.
-- For standalone handwriting that is not a form field, emit one `% #VALUE_ID` immediately before its `% #HANDWRITTEN` comment and `\handwritten{{...}}` wrapper.
+- For standalone handwriting that is not a form field, emit one `% #VALUE_ID` immediately before its `% #HANDWRITTEN` comment and `{standalone_wrapper}` wrapper.
 - Never place `% #VALUE_ID` at the end of a table environment. It must remain adjacent to the source value it identifies, including inside table cells.
 """
 
@@ -179,16 +197,15 @@ Output requirements for FIRST page:
 \BeforeBeginEnvironment{{tabularx}}{{\par\noindent}}
 \newcommand{{\fieldvalue}}[1]{{#1}}
 \newcommand{{\handwritten}}[1]{{#1}}
-\newcommand{{\checkboxfield}}[1]{{\ifstrequal{{#1}}{{checked}}{{☑}}{{\ifstrequal{{#1}}{{unclear}}{{?}}{{☐}}}}}}
+{LATEX_CHECKBOX_FIELD_COMMAND}
 \begin{{document}}
 
-- If THIS page visibly contains a title/author/date/abstract, render them using:
-\title{{...}}
-\author{{...}}
-\date{{...}}
-\maketitle
-\begin{{abstract}}... \end{{abstract}}
-If any are missing or ambiguous on THIS page, omit them and add a % TODO note.
+- Render visible headings inline, preserving their position relative to the page header:
+\begin{{center}}{{\large\bfseries ...}}\end{{center}}
+- Render visible author/date/abstract content as ordinary text in its source position.
+  Omit absent author/date/abstract content. Do not create a title page or implicit page break.
+- Keep all content of this source page together. The pipeline applies the page's
+  actual reading dimensions, including landscape orientation, before publication.
 
 - Convert ONLY visible content on THIS page (follow the common rules above).
 

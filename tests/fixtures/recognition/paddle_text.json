@@ -1,0 +1,5 @@
+{
+  "rec_texts": ["Batch ID"],
+  "rec_scores": [0.98],
+  "rec_boxes": [[42, 81, 233, 126]]
+}

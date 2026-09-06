@@ -127,14 +127,20 @@ class RenderMetadata:
     dpi: int
     width: int
     height: int
+    rotation: int = 0
 
     def __post_init__(self) -> None:
         _positive_int(self.dpi, "dpi")
         _positive_int(self.width, "width")
         _positive_int(self.height, "height")
+        if type(self.rotation) is not int or self.rotation not in (0, 90, 180, 270):
+            raise ValueError("render rotation must be 0, 90, 180, or 270")
 
     def to_dict(self) -> dict[str, int]:
-        return {"dpi": self.dpi, "width": self.width, "height": self.height}
+        result = {"dpi": self.dpi, "width": self.width, "height": self.height}
+        if self.rotation:
+            result["rotation"] = self.rotation
+        return result
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "RenderMetadata":
@@ -142,6 +148,7 @@ class RenderMetadata:
             dpi=_positive_int(payload.get("dpi"), "render dpi"),
             width=_positive_int(payload.get("width"), "render width"),
             height=_positive_int(payload.get("height"), "render height"),
+            rotation=payload.get("rotation", 0),
         )
 
 
@@ -154,12 +161,15 @@ class RenderedPage:
     width: int
     height: int
     image: Any
+    rotation: int = 0
 
     def __post_init__(self) -> None:
         _positive_int(self.page, "page")
         _positive_int(self.dpi, "dpi")
         _positive_int(self.width, "width")
         _positive_int(self.height, "height")
+        if type(self.rotation) is not int or self.rotation not in (0, 90, 180, 270):
+            raise ValueError("page rotation must be 0, 90, 180, or 270")
         if getattr(self.image, "size", None) != (self.width, self.height):
             raise ValueError("image dimensions do not match width and height")
 
@@ -252,6 +262,7 @@ class TableEvidence:
     cells: tuple[TableCell, ...]
     source: str
     fallback_reason: str | None = None
+    original_table: TableEvidence | None = None
 
     def __post_init__(self) -> None:
         _positive_int(self.page, "table page")
@@ -262,6 +273,12 @@ class TableEvidence:
         if not _text(self.source, "table source").strip():
             raise ValueError("table source must not be empty")
         _optional_text(self.fallback_reason, "table fallback_reason")
+        if self.original_table is not None:
+            if (not isinstance(self.original_table, TableEvidence)
+                    or self.original_table.page != self.page
+                    or self.original_table.bbox != self.bbox
+                    or self.original_table.original_table is not None):
+                raise ValueError("Original table must describe the same region without nesting")
         for cell in self.cells:
             if cell.row + cell.rowspan > self.rows:
                 raise ValueError("table cell row span exceeds table dimensions")
@@ -269,7 +286,7 @@ class TableEvidence:
                 raise ValueError("table cell column span exceeds table dimensions")
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result = {
             "page": self.page,
             "bbox": list(self.bbox),
             "rows": self.rows,
@@ -278,6 +295,9 @@ class TableEvidence:
             "source": self.source,
             "fallback_reason": self.fallback_reason,
         }
+        if self.original_table is not None:
+            result["original_table"] = self.original_table.to_dict()
+        return result
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "TableEvidence":
@@ -294,6 +314,8 @@ class TableEvidence:
             fallback_reason=_optional_text(
                 payload.get("fallback_reason"), "table fallback_reason"
             ),
+            original_table=cls.from_dict(_mapping(payload["original_table"], "original table"))
+            if payload.get("original_table") is not None else None,
         )
 
 

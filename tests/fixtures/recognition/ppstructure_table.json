@@ -1,0 +1,5 @@
+{
+  "boxes": [
+    {"label": "table", "coordinate": [10, 20, 200, 300], "score": 0.99}
+  ]
+}

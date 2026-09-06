@@ -50,7 +50,12 @@ def _require_key(api: Optional[str], model: str) -> None:
 
 def cmd_extract(a) -> int:
     from .extract import extract, write_fields_json
+    from lexoid.core.model_config import resolve_model
 
+    try:
+        a.model = resolve_model("FORMKIT_MODEL", a.model)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     _require_key(a.api, a.model)
     r = extract(a.input, model=a.model, api=a.api, threshold=a.threshold,
                 reread=not a.no_reread, max_workers=a.workers, dpi=a.dpi, progress=_p)
@@ -100,8 +105,8 @@ def main(argv=None) -> int:
     e = sub.add_parser("extract", help="PDF → fields.json")
     e.add_argument("input")
     e.add_argument("-o", "--output", default="fields.json")
-    e.add_argument("-m", "--model", default="gemini-2.5-flash",
-                   help="默认 gemini-2.5-flash（原生支持 box_2d 坐标检测）")
+    e.add_argument("-m", "--model", default=None,
+                   help="默认读取环境变量 FORMKIT_MODEL")
     e.add_argument("--api", default=None, choices=["gemini", "openai", "anthropic"])
     e.add_argument("--threshold", type=float, default=0.75,
                    help="低于此置信度进人工复核队列（默认 0.75）")
