@@ -8,6 +8,7 @@ from dataclasses import replace
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import io
+import json
 from pathlib import Path
 import random
 import threading
@@ -203,9 +204,6 @@ class PageRecognizer:
                 break
             except Exception as exc:
                 from lexoid.core.model_telemetry import emit
-                emit({"event": "validation_or_request_error", "stage": "recognize",
-                      "page": page.page, "attempt": attempt + 1,
-                      "error_type": type(exc).__name__})
                 if isinstance(exc, RecoverableVisionError) and exc.fallback is not None:
                     fallback = exc.fallback
                 status = getattr(exc, "status_code", None)
@@ -215,7 +213,23 @@ class PageRecognizer:
                              or status in (429, 408, 500, 502, 503, 504)
                              or connection_error
                              or "timeout" in type(exc).__name__.lower())
-                if not retryable or attempt == 1:
+                metadata_only = (isinstance(exc, RecoverableVisionError)
+                                 and exc.stage == "field_metadata"
+                                 and exc.fallback is not None)
+                will_retry = retryable and attempt == 0 and not metadata_only
+                # Provider exception messages can contain request data; only expose
+                # local validation details, never raw HTTP errors or response bodies.
+                message = (str(exc)[:1000] if isinstance(exc, RecoverableVisionError)
+                           else exc.msg if isinstance(exc, json.JSONDecodeError)
+                           else None)
+                emit({"event": "validation_or_request_error", "stage": "recognize",
+                      "page": page.page, "attempt": attempt + 1,
+                      "error_type": type(exc).__name__, "error_message": message,
+                      "error_stage": getattr(exc, "stage", "response_or_request"),
+                      "http_status": status, "has_fallback_tex": fallback is not None,
+                      "action": "retry" if will_retry else
+                                "use_tex" if fallback is not None else "fallback_page"})
+                if not will_retry:
                     result = fallback or VisionPageResult(
                         page.page,
                         fallback_page_latex(page.page, evidence, self.page_count),

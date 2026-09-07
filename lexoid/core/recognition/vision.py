@@ -60,8 +60,9 @@ class FieldValueMismatch(ValueError):
 
 
 class RecoverableVisionError(ValueError):
-    def __init__(self, message, fallback=None):
+    def __init__(self, message, fallback=None, *, stage="latex_validation"):
         self.fallback = fallback
+        self.stage = stage
         super().__init__(message)
 
 
@@ -365,17 +366,22 @@ class VisionLatexAdapter:
             raise ValueError("Vision response is not text")
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
         payload = json.loads(text)
+        validation_stage = "latex_validation"
         try:
             payload["latex"] = normalize_field_annotation_spacing(payload["latex"])
+            validation_stage = "field_metadata"
             payload = expand_field_metadata(payload, page.page)
+            result = _page_result(payload, page, evidence)
+            validation_stage = "latex_validation"
             validate_page_latex(payload["latex"], payload["fields"], page.page, page_count)
-            return _page_result(payload, page, evidence)
+            return result
         except FieldValueMismatch as exc:
             canonical = {item["field_id"]: item["value"] for item in exc.mismatches}
             try:
                 result = _page_result(payload, page, evidence, canonical)
             except (KeyError, TypeError, ValueError) as field_error:
-                raise RecoverableVisionError(str(field_error)) from field_error
+                raise RecoverableVisionError(
+                    str(field_error), stage="field_metadata") from field_error
             if all(item["is_handwritten"] for item in exc.mismatches):
                 return result
             raise RecoverableVisionError(str(exc), result) from exc
@@ -383,4 +389,4 @@ class VisionLatexAdapter:
             latex = payload.get("latex") if isinstance(payload, dict) else None
             salvaged = _salvage_latex(latex, page.page, page_count)
             fallback = VisionPageResult(page.page, salvaged, ()) if salvaged else None
-            raise RecoverableVisionError(str(exc), fallback) from exc
+            raise RecoverableVisionError(str(exc), fallback, stage=validation_stage) from exc

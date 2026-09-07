@@ -260,6 +260,51 @@ def test_empty_responses_retry_once_then_emit_a_complete_page(tmp_path):
     assert "vision" in result.evidence.degraded_adapters
 
 
+@pytest.mark.parametrize("damage", ["missing_id", "bbox", "confidence"])
+def test_metadata_errors_keep_tex_without_retry_and_log_reason(tmp_path, capsys, damage):
+    payload = _one_page_payload()
+    payload.pop("fields")
+    payload["field_meta"] = {"V0001": [[10, 20, 80, 50], 0.9, False]}
+    if damage == "missing_id":
+        payload["field_meta"] = {}
+    elif damage == "bbox":
+        payload["field_meta"]["V0001"][0] = [10, 20, "bad", 50]
+    else:
+        payload["field_meta"]["V0001"][1] = 2.0
+
+    result, calls = _recognizer_with_responses(
+        tmp_path, [{"response": json.dumps(payload)}]
+    )
+
+    assert len(calls) == 1
+    assert r"\fieldvalue{A12}" in result.latex
+    assert result.evidence.fields == ()
+    assert "vision" in result.evidence.degraded_adapters
+    events = [json.loads(line.removeprefix("[LLM_CALL] "))
+              for line in capsys.readouterr().err.splitlines()
+              if line.startswith("[LLM_CALL] ")]
+    error = next(event for event in events
+                 if event["event"] == "validation_or_request_error")
+    assert error["error_stage"] == "field_metadata"
+    assert error["error_message"]
+    assert error["action"] == "use_tex"
+    assert error["has_fallback_tex"] is True
+
+
+def test_layout_error_logs_reason_and_retry_decision(tmp_path, capsys):
+    payload = _one_page_payload()
+    payload["latex"] += "\n% LEXOID_PAGE_COMPLETED: 9/9"
+    _recognizer_with_responses(tmp_path, [{"response": json.dumps(payload)}])
+    events = [json.loads(line.removeprefix("[LLM_CALL] "))
+              for line in capsys.readouterr().err.splitlines()
+              if line.startswith("[LLM_CALL] ")]
+    errors = [event for event in events
+              if event["event"] == "validation_or_request_error"]
+    assert [event["action"] for event in errors] == ["retry", "use_tex"]
+    assert all(event["error_stage"] == "latex_validation" for event in errors)
+    assert "completion marker" in errors[0]["error_message"]
+
+
 def test_rate_limit_reduces_capacity_then_recovers_slowly():
     gate = AdaptiveConcurrency(initial=4)
     gate.on_rate_limit()
