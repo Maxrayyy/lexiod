@@ -606,12 +606,14 @@ def parse_to_latex(
         config = RecognitionConfig(
             ocr=ocr, device=kwargs.get("device", "cpu"), initial_render_dpi=render_dpi,
             retry_crop_dpi=max(480, render_dpi), vision_concurrency=vision_concurrency,
+            max_page_attempts=kwargs.get("max_page_attempts", 2),
             min_output_tokens=8192 if ocr == "none" else 2048,
             enable_vl_fallback=ocr == "paddleocr" and kwargs.get("enable_vl_fallback", True),
         )
         recognizer = DocumentRecognizer(
             model=model, api=api or get_api_provider_for_model(model), config=config,
             cache_dir=cache_dir, resume=resume, auto_orient=auto_orient,
+            page_processor=kwargs.get("page_processor"),
         )
         def on_page(page, total, text):
             if page_callback:

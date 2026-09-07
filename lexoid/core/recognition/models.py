@@ -91,6 +91,7 @@ class RecognitionConfig:
     render_workers: int = 2
     paddle_batch_size: int = 4
     vision_concurrency: int = 4
+    max_page_attempts: int = 2
     min_output_tokens: int = 2048
     max_output_tokens: int = 8192
     paddle_low_score: float = 0.70
@@ -118,6 +119,8 @@ class RecognitionConfig:
         if self.min_output_tokens > self.max_output_tokens:
             raise ValueError("min_output_tokens must not exceed max_output_tokens")
         _score(self.paddle_low_score, "paddle_low")
+        if type(self.max_page_attempts) is not int or self.max_page_attempts not in (1, 2):
+            raise ValueError("max_page_attempts must be 1 or 2")
 
 
 @dataclass(frozen=True)

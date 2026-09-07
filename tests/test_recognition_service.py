@@ -1,5 +1,7 @@
 import json
 import time
+import threading
+from dataclasses import replace
 
 from PIL import Image
 import pytest
@@ -143,6 +145,81 @@ def test_page_that_stays_invalid_is_retried_once_then_degraded(tmp_path):
     assert callbacks == [1, 2, 3]
     assert vision.attempts[2] == 2
     assert "vision" in results[1].evidence.degraded_adapters
+
+
+def test_primary_can_reserve_its_only_retry_for_an_external_fallback(tmp_path):
+    pdf = tmp_path / "input.pdf"
+    pdf.write_bytes(b"pdf")
+    vision = Vision(fail_page=2)
+    run = recognizer(tmp_path, vision=vision)
+    run.config = replace(run.config, max_page_attempts=1)
+    results = run.recognize(pdf)
+    assert vision.attempts[2] == 1
+    assert "LEXOID_RECOGNITION_FALLBACK" in results[1].latex
+    assert [r.page for r in results] == [1, 2, 3]
+
+
+def test_page_processing_overlaps_later_recognition_and_preserves_delivery_order(tmp_path):
+    pdf = tmp_path / "input.pdf"
+    pdf.write_bytes(b"pdf")
+    check_started = threading.Event()
+    later_recognized = threading.Event()
+
+    class StreamingVision(Vision):
+        def recognize(self, page, evidence, page_count):
+            if page.page == 2:
+                assert check_started.wait(3)
+                later_recognized.set()
+            return super().recognize(page, evidence, page_count)
+
+    processed, delivered = [], []
+
+    def process(result, total, gate):
+        if result.page == 1:
+            check_started.set()
+            assert later_recognized.wait(3)
+        processed.append(result.page)
+        return replace(result, latex="processed " + result.latex)
+
+    run = recognizer(tmp_path, vision=StreamingVision())
+    run.page_processor = process
+    results = run.recognize(pdf, page_callback=lambda p, n, t: delivered.append((p, t)))
+    assert processed == [1, 2, 3]
+    assert [p for p, _ in delivered] == [1, 2, 3]
+    assert all(t.startswith("processed ") for _, t in delivered)
+    assert all(r.latex.startswith("processed ") for r in results)
+
+
+def test_primary_and_page_processor_share_one_model_concurrency_gate(tmp_path):
+    pdf = tmp_path / "input.pdf"
+    pdf.write_bytes(b"pdf")
+    active = maximum = 0
+    lock = threading.Lock()
+
+    def request():
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+
+    class CountedVision(Vision):
+        def recognize(self, *args):
+            request()
+            return super().recognize(*args)
+
+    def process(result, total, gate):
+        with gate.slot():
+            request()
+        return result
+
+    run = recognizer(tmp_path, vision=CountedVision())
+    run.config = replace(run.config, vision_concurrency=2)
+    run.page_processor = process
+    assert len(run.recognize(pdf)) == 3
+    assert maximum == 2
 
 
 def test_invalid_model_layout_is_retried_before_page_fails(tmp_path):

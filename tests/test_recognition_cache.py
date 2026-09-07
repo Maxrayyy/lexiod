@@ -45,6 +45,12 @@ def test_cache_key_changes_when_recognition_input_changes() -> None:
     assert original != changed
 
 
+def test_reserving_retry_for_fallback_keeps_primary_drafts_reusable():
+    original = build_cache_key(PDF_SHA, CONFIG, {}, "p1", "vision")
+    reserved = build_cache_key(PDF_SHA, replace(CONFIG, max_page_attempts=1), {}, "p1", "vision")
+    assert original == reserved
+
+
 def test_cache_uses_stage_key_and_physical_page_paths(tmp_path) -> None:
     cache = RecognitionCache(tmp_path, "abc")
 

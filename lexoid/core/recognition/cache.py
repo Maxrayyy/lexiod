@@ -27,9 +27,13 @@ def build_cache_key(
     """Hash every input that can change recognition output."""
     if not re.fullmatch(r"[0-9a-fA-F]{64}", pdf_sha256):
         raise ValueError("pdf_sha256 must contain 64 hexadecimal characters")
+    recognition_config = asdict(config)
+    # Retry policy is not a model input. Preserve existing primary drafts when
+    # the pipeline reserves its second attempt for a different model.
+    recognition_config.pop("max_page_attempts")
     payload = {
         "pdf_sha256": pdf_sha256.lower(),
-        "recognition_config": asdict(config),
+        "recognition_config": recognition_config,
         "paddle_versions": dict(sorted(paddle_versions.items())),
         "prompt_version": prompt_version,
         "vision_model": vision_model,

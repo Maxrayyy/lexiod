@@ -193,7 +193,7 @@ class PageRecognizer:
             evidence = self.prepare_batch([page])[page.page]
         fallback = None
         degraded = False
-        for attempt in range(2):
+        for attempt in range(self.config.max_page_attempts):
             try:
                 with self.gate.slot():
                     from lexoid.core.model_telemetry import call_context
@@ -216,7 +216,8 @@ class PageRecognizer:
                 metadata_only = (isinstance(exc, RecoverableVisionError)
                                  and exc.stage == "field_metadata"
                                  and exc.fallback is not None)
-                will_retry = retryable and attempt == 0 and not metadata_only
+                will_retry = (retryable and attempt + 1 < self.config.max_page_attempts
+                              and not metadata_only)
                 # Provider exception messages can contain request data; only expose
                 # local validation details, never raw HTTP errors or response bodies.
                 message = (str(exc)[:1000] if isinstance(exc, RecoverableVisionError)
@@ -254,10 +255,12 @@ class PageRecognizer:
 class DocumentRecognizer:
     def __init__(self, model, config=None, cache_dir=None, api="openai", resume=True,
                  auto_orient=True, renderer=None, page_counter=None, text_adapter=None,
-                 layout_adapter=None, table_adapter=None, vision_adapter=None, vl_adapter=None):
+                 layout_adapter=None, table_adapter=None, vision_adapter=None, vl_adapter=None,
+                 page_processor=None):
         self.config = config or RecognitionConfig()
         self.model, self.api, self.resume, self.auto_orient = model, api, resume, auto_orient
         self.cache_dir = Path(cache_dir or ".lexoid-cache")
+        self.page_processor = page_processor
         self.renderer, self.page_counter = renderer or render_pdf_page, page_counter or _page_count
         self.text = self.layout = self.tables = self.vl = None
         if self.config.ocr == "paddleocr":
@@ -288,20 +291,36 @@ class DocumentRecognizer:
         owner = PageRecognizer(self.config, cache, self.page_count, self.vision, self.text,
                                self.layout, self.tables, self.vl, self.resume)
         results, errors, pending, todo = {}, {}, {}, []
+        processed, checking = {}, {}
+        next_check = 1
         next_callback = start_page
 
         def deliver():
-            nonlocal next_callback
-            while next_callback in results:
+            nonlocal next_callback, next_check
+            while next_check in results:
+                result = results[next_check]
+                if self.page_processor:
+                    checking[checks.submit(self.page_processor, result, self.page_count,
+                                           owner.gate)] = next_check
+                else:
+                    processed[next_check] = result
+                next_check += 1
+            while next_callback in processed:
                 if page_callback:
-                    page_callback(next_callback, self.page_count, results[next_callback].latex)
+                    page_callback(next_callback, self.page_count, processed[next_callback].latex)
                 next_callback += 1
 
         def collect(done):
             for future in done:
-                number = pending.pop(future)
+                is_check = future in checking
+                number = (checking if is_check else pending).pop(future)
                 try:
-                    results[number] = future.result()
+                    result = future.result()
+                    if result.page != number:
+                        raise ValueError("Page processor changed the physical page")
+                    if is_check:
+                        validate_page_checkpoint(result.latex, number, self.page_count)
+                    (processed if is_check else results)[number] = result
                 except Exception as exc:
                     errors[number] = exc
             deliver()
@@ -314,11 +333,12 @@ class DocumentRecognizer:
                 raise IncompleteDocumentError(number, "resume requires a matching cached draft")
             else:
                 todo.append(number)
-        deliver()
         # PDFium is not thread-safe. Production renders run in separate processes.
         executor_type = ProcessPoolExecutor if self.renderer is render_pdf_page else ThreadPoolExecutor
         with executor_type(max_workers=self.config.render_workers) as renders, \
-                ThreadPoolExecutor(max_workers=self.config.vision_concurrency) as visions:
+                ThreadPoolExecutor(max_workers=self.config.vision_concurrency) as visions, \
+                ThreadPoolExecutor(max_workers=1) as checks:
+            deliver()
             batch_size = self.config.paddle_batch_size
             for offset in range(0, len(todo), batch_size):
                 batch, render_jobs = [], {}
@@ -349,12 +369,12 @@ class DocumentRecognizer:
                 prepared = owner.prepare_batch(batch)
                 for page in batch:
                     pending[visions.submit(owner.recognize_page, page, prepared[page.page])] = page.page
-                while len(pending) >= self.config.vision_concurrency * 2:
-                    collect(wait(pending, return_when=FIRST_COMPLETED).done)
-                collect({future for future in pending if future.done()})
-            if pending:
-                collect(wait(pending).done)
+                while len(pending) + len(checking) >= self.config.vision_concurrency * 2:
+                    collect(wait([*pending, *checking], return_when=FIRST_COMPLETED).done)
+                collect({future for future in [*pending, *checking] if future.done()})
+            while pending or checking:
+                collect(wait([*pending, *checking], return_when=FIRST_COMPLETED).done)
         for number in range(1, self.page_count + 1):
-            if number not in results:
+            if number not in processed:
                 raise IncompleteDocumentError(number, str(errors.get(number, "missing page")))
-        return [results[number] for number in range(1, self.page_count + 1)]
+        return [processed[number] for number in range(1, self.page_count + 1)]

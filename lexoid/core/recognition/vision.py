@@ -312,7 +312,8 @@ def fallback_page_latex(page, evidence, page_count):
     else:
         body = "\\null\n"
     suffix = "\\end{document}\n" if page == page_count else ""
-    return _normalize_checkpoint(prefix + body + suffix, page, page_count)
+    return _normalize_checkpoint(prefix + "% LEXOID_RECOGNITION_FALLBACK\n" + body + suffix,
+                                 page, page_count)
 
 
 def _page_result(payload, page, evidence, canonical_values=None):
