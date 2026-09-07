@@ -210,8 +210,10 @@ class PageRecognizer:
                     fallback = exc.fallback
                 status = getattr(exc, "status_code", None)
                 invalid_model_output = isinstance(exc, ValueError)
+                connection_error = "connection" in type(exc).__name__.lower()
                 retryable = (invalid_model_output
                              or status in (429, 408, 500, 502, 503, 504)
+                             or connection_error
                              or "timeout" in type(exc).__name__.lower())
                 if not retryable or attempt == 1:
                     result = fallback or VisionPageResult(

@@ -72,6 +72,22 @@ class VisionInvalidOnce(Vision):
         return super().recognize(page, evidence, page_count)
 
 
+class APIConnectionError(Exception):
+    pass
+
+
+class VisionConnectionErrorOnce(Vision):
+    def __init__(self, failed_page):
+        super().__init__()
+        self.failed_page = failed_page
+
+    def recognize(self, page, evidence, page_count):
+        if page.page == self.failed_page and self.attempts.get(page.page, 0) == 0:
+            self.attempts[page.page] = 1
+            raise APIConnectionError("Connection error")
+        return super().recognize(page, evidence, page_count)
+
+
 def recognizer(tmp_path, text=None, vision=None):
     return DocumentRecognizer(
         model="gpt-6-astra", config=RecognitionConfig(enable_vl_fallback=False),
@@ -136,6 +152,19 @@ def test_invalid_model_layout_is_retried_before_page_fails(tmp_path):
     results = recognizer(tmp_path, vision=vision).recognize(pdf)
     assert [result.page for result in results] == [1, 2, 3]
     assert vision.attempts[2] == 2
+
+
+def test_api_connection_error_is_retried_once(tmp_path, monkeypatch):
+    pdf = tmp_path / "input.pdf"
+    pdf.write_bytes(b"pdf")
+    vision = VisionConnectionErrorOnce(failed_page=2)
+    monkeypatch.setattr("lexoid.core.recognition.service.time.sleep", lambda _seconds: None)
+
+    results = recognizer(tmp_path, vision=vision).recognize(pdf)
+
+    assert [result.page for result in results] == [1, 2, 3]
+    assert vision.attempts[2] == 2
+    assert "vision" not in results[1].evidence.degraded_adapters
 
 
 def _one_page_payload(tex_value="A12", model_guess="A12"):
