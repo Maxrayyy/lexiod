@@ -706,6 +706,7 @@ def create_response(
     image_url: Optional[str] = None,
     temperature: float = 0.0,
     max_tokens: int = 1024,
+    reasoning_effort: Optional[str] = None,
 ) -> Dict:
     from anthropic import Anthropic
     from huggingface_hub import InferenceClient
@@ -851,6 +852,8 @@ def create_response(
     }
     if api == "openai":
         completion_params.update(completion_options(model, max_tokens, temperature))
+        if reasoning_effort is not None:
+            completion_params["reasoning_effort"] = reasoning_effort
 
     # Get completion from selected API
     response = client.chat.completions.create(**completion_params)

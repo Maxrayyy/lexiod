@@ -51,6 +51,12 @@ def test_reserving_retry_for_fallback_keeps_primary_drafts_reusable():
     assert original == reserved
 
 
+def test_reasoning_modes_have_distinct_draft_caches():
+    keys = {build_cache_key(PDF_SHA, replace(CONFIG, reasoning_effort=effort), {}, "p1", "sol")
+            for effort in (None, "none", "low")}
+    assert len(keys) == 3
+
+
 def test_cache_uses_stage_key_and_physical_page_paths(tmp_path) -> None:
     cache = RecognitionCache(tmp_path, "abc")
 

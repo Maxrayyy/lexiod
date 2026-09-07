@@ -65,6 +65,38 @@ def test_hybrid_cli_forwards_settings(tmp_path, monkeypatch):
     assert seen["evidence_output"].endswith("raw.recognition.json")
 
 
+@pytest.mark.parametrize("model, setting, expected", [
+    ("gpt-5.6-sol", None, "none"),
+    ("gpt-5.6-sol", "none", "none"),
+    ("gpt-5.6-sol", "low", "low"),
+    ("gpt-5.6-sol", "", None),
+    ("gpt-6-astra", "none", None),
+])
+def test_sol_vision_defaults_to_none_without_changing_astra(tmp_path, monkeypatch, model, setting, expected):
+    import json
+    from lexoid.core.recognition import service
+    seen = []
+
+    class Recognizer:
+        document_sha256 = "a" * 64
+
+        def __init__(self, **kwargs):
+            seen.append(kwargs["config"])
+
+        def recognize(self, path, **kwargs):
+            return []
+
+    monkeypatch.setattr(service, "DocumentRecognizer", Recognizer)
+    if setting is None:
+        monkeypatch.delenv("SOL_VISION_REASONING_EFFORT", raising=False)
+    else:
+        monkeypatch.setenv("SOL_VISION_REASONING_EFFORT", setting)
+    output = tmp_path / "evidence.json"
+    parse_to_latex("source.pdf", model=model, ocr="none", evidence_output=str(output))
+    assert seen[0].reasoning_effort == expected
+    assert json.loads(output.read_text())["reasoning_effort"] == expected
+
+
 @pytest.mark.parametrize("indent", ["", "  "])
 def test_evidence_cli_saves_each_recognized_page_checkpoint_once(tmp_path, monkeypatch, indent):
     from click.testing import CliRunner

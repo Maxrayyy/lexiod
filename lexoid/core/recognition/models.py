@@ -92,6 +92,7 @@ class RecognitionConfig:
     paddle_batch_size: int = 4
     vision_concurrency: int = 4
     max_page_attempts: int = 2
+    reasoning_effort: str | None = None
     min_output_tokens: int = 2048
     max_output_tokens: int = 8192
     paddle_low_score: float = 0.70
@@ -121,6 +122,8 @@ class RecognitionConfig:
         _score(self.paddle_low_score, "paddle_low")
         if type(self.max_page_attempts) is not int or self.max_page_attempts not in (1, 2):
             raise ValueError("max_page_attempts must be 1 or 2")
+        if self.reasoning_effort not in (None, "none", "minimal", "low", "medium", "high", "xhigh"):
+            raise ValueError("Unsupported reasoning_effort")
 
 
 @dataclass(frozen=True)

@@ -358,12 +358,16 @@ class VisionLatexAdapter:
         prompt += f"\nCompletion comment: % LEXOID_PAGE_COMPLETED: {page.page}/{page_count}"
         data = io.BytesIO()
         page.image.save(data, format="PNG")
+        options = {}
+        if self.config.reasoning_effort is not None:
+            options["reasoning_effort"] = self.config.reasoning_effort
         response = self._respond(
             api=self.api, model=self.model, system_prompt=prompt,
             user_prompt="Recognize this page. Advisory evidence:\n" + compact_evidence(evidence),
             image_url="data:image/png;base64," + base64.b64encode(data.getvalue()).decode("ascii"),
             max_tokens=output_token_budget(evidence, self.config.min_output_tokens,
                                            self.config.max_output_tokens),
+            **options,
         )
         if response.get("finish_reason") == "length":
             raise ValueError("Truncated vision response")

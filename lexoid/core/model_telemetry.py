@@ -50,6 +50,8 @@ def trace_response(function):
                  "max_tokens": bound.arguments.get("max_tokens"),
                  "retry_count": attempt - 1,
                  "started_at": datetime.now(timezone.utc).isoformat()}
+        if bound.arguments.get("reasoning_effort") is not None:
+            event["reasoning_effort"] = bound.arguments["reasoning_effort"]
         started = time.monotonic()
         emit({**event, "event": "start"})
         result = None

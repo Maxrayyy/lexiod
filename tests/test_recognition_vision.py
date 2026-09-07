@@ -106,6 +106,22 @@ def test_vision_keeps_field_contract_and_source_image():
     assert calls[0]["image_url"].startswith("data:image/png;base64,")
     assert calls[0]["max_tokens"] >= 2048
     assert calls[0]["model"] == "gpt-6-astra"
+    assert "reasoning_effort" not in calls[0]
+
+
+def test_vision_forwards_explicit_none_reasoning():
+    from lexoid.core.recognition.models import RecognitionConfig
+    calls = []
+
+    def respond(**kwargs):
+        calls.append(kwargs)
+        return {"response": json.dumps(reply())}
+
+    page = RenderedPage(1, 240, 300, 400, Image.new("RGB", (300, 400)))
+    adapter = VisionLatexAdapter("gpt-5.6-sol", config=RecognitionConfig(reasoning_effort="none"),
+                                response_factory=respond)
+    adapter.recognize(page, evidence(), 3)
+    assert calls[0]["reasoning_effort"] == "none"
 
 
 @pytest.mark.parametrize("change", ["missing_marker", "duplicate", "wrong_page", "empty", "missing_field"])

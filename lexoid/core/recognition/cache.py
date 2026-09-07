@@ -31,6 +31,8 @@ def build_cache_key(
     # Retry policy is not a model input. Preserve existing primary drafts when
     # the pipeline reserves its second attempt for a different model.
     recognition_config.pop("max_page_attempts")
+    if recognition_config["reasoning_effort"] is None:
+        recognition_config.pop("reasoning_effort")
     payload = {
         "pdf_sha256": pdf_sha256.lower(),
         "recognition_config": recognition_config,

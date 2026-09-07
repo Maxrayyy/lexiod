@@ -607,6 +607,9 @@ def parse_to_latex(
             ocr=ocr, device=kwargs.get("device", "cpu"), initial_render_dpi=render_dpi,
             retry_crop_dpi=max(480, render_dpi), vision_concurrency=vision_concurrency,
             max_page_attempts=kwargs.get("max_page_attempts", 2),
+            reasoning_effort=kwargs.get("reasoning_effort",
+                (os.getenv("SOL_VISION_REASONING_EFFORT", "none").strip() or None)
+                if model.lower() == "gpt-5.6-sol" else None),
             min_output_tokens=8192 if ocr == "none" else 2048,
             enable_vl_fallback=ocr == "paddleocr" and kwargs.get("enable_vl_fallback", True),
         )
@@ -626,6 +629,7 @@ def parse_to_latex(
             payload = {"schema": "recognition/v1", "pipeline_version": PROMPT_VERSION,
                        "document_sha256": recognizer.document_sha256,
                        "model": model, "ocr": ocr, "auto_orient": auto_orient,
+                       "reasoning_effort": config.reasoning_effort,
                        "pages": [result.evidence.to_dict() for result in results]}
             _atomic_write(Path(evidence_output),
                 (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))

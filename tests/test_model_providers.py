@@ -97,6 +97,26 @@ def test_reasoning_model_honors_token_budget_and_reports_truncation(monkeypatch,
     result = create_response("openai", model, user_prompt="page", max_tokens=8192)
     assert captured["max_completion_tokens"] == 8192
     assert "temperature" not in captured
+    assert "reasoning_effort" not in captured
     assert result["finish_reason"] == "length"
     assert result["usage_missing"] is True
     assert result["usage"]["total_tokens"] == 0
+
+
+@pytest.mark.parametrize("effort", ["none", "low"])
+def test_explicit_reasoning_effort_reaches_provider_and_call_log(monkeypatch, capsys, effort):
+    import json
+    captured = {}
+
+    def complete(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(usage=None, choices=[SimpleNamespace(
+            message=SimpleNamespace(content="text"), finish_reason="stop")])
+
+    monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=complete))))
+    create_response("openai", "gpt-5.6-sol", user_prompt="page", reasoning_effort=effort)
+    assert captured["reasoning_effort"] == effort
+    events = [json.loads(line.removeprefix("[LLM_CALL] "))
+              for line in capsys.readouterr().err.splitlines() if line.startswith("[LLM_CALL] ")]
+    assert all(event["reasoning_effort"] == effort for event in events)
