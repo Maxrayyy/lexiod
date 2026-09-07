@@ -11,6 +11,7 @@ import unicodedata
 from pylatexenc.latex2text import LatexNodes2Text, MacroTextSpec, get_default_latex_context_db
 
 from lexoid.core.latex_template import organize_latex
+from lexoid.core.model_telemetry import emit
 from lexoid.core.prompt_templates import (
     LATEX_FIRST_PAGE_PROMPT, LATEX_LAST_PAGE_PROMPT, LATEX_MIDDLE_PAGE_PROMPT,
     latex_page_value_id_prompt,
@@ -184,7 +185,8 @@ def _vertical_overlap(a, b):
     return max(0, min(a[3], b[3]) - max(a[1], b[1])) / smaller
 
 
-def _validate_visual_table_rows(latex, fields):
+def _warn_visual_table_rows(latex, fields, page):
+    # Estimated boxes and TeX line breaks cannot reliably identify logical rows.
     positions = {fid: latex.find(f"% #VALUE_ID: {fid}")
                  for fid, _ in map(_field_parts, fields) if fid}
     boxes = dict(_field_parts(field) for field in fields)
@@ -199,10 +201,13 @@ def _validate_visual_table_rows(latex, fields):
             for right in members[index + 1:]:
                 if rows[left] != rows[right] and _vertical_overlap(
                         boxes[left], boxes[right]) >= 0.65:
-                    raise ValueError(
-                        f"Fields {left} and {right} share a visual row but are split "
-                        "across LaTeX table rows"
-                    )
+                    emit({"event": "validation_warning", "stage": "recognize",
+                          "page": page, "code": "visual_table_row_mismatch",
+                          "field_ids": [left, right],
+                          "action": "keep_tex_and_fields",
+                          "message": "Estimated field boxes overlap vertically "
+                                     "but TeX row indices differ"})
+                    return
 
 
 def validate_page_latex(latex, fields, page, page_count):
@@ -236,7 +241,7 @@ def validate_page_latex(latex, fields, page, page_count):
                 mismatches.append({"field_id": fid, **rendered[fid]})
         if mismatches:
             raise FieldValueMismatch(mismatches)
-    _validate_visual_table_rows(latex, fields)
+    _warn_visual_table_rows(latex, fields, page)
 
 
 def _overlap(a, b):

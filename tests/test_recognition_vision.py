@@ -234,7 +234,7 @@ def test_page_rejects_consecutive_tables_in_the_same_paragraph():
         validate_page_latex(latex, [], 2, 3)
 
 
-def test_page_rejects_visual_row_split_across_latex_table_rows():
+def test_page_warns_visual_row_split_across_latex_table_rows(capsys):
     latex = (
         r"\begin{tabular}{ll}" "\n"
         "% #VALUE_ID: LEX-P0002-V0001\n"
@@ -252,11 +252,16 @@ def test_page_rejects_visual_row_split_across_latex_table_rows():
         {"field_id": "LEX-P0002-V0002", "model_guess": "25",
          "bbox": [80, 102, 110, 132]},
     ]
-    with pytest.raises(ValueError, match="visual row"):
-        validate_page_latex(latex, fields, 2, 3)
+    validate_page_latex(latex, fields, 2, 3)
+    warning = json.loads(capsys.readouterr().err.removeprefix("[LLM_CALL] "))
+    assert warning["event"] == "validation_warning"
+    assert warning["code"] == "visual_table_row_mismatch"
+    assert warning["page"] == 2
+    assert warning["field_ids"] == ["LEX-P0002-V0001", "LEX-P0002-V0002"]
+    assert warning["action"] == "keep_tex_and_fields"
 
 
-def test_page_accepts_visual_row_kept_in_one_latex_table_row():
+def test_page_accepts_visual_row_kept_in_one_latex_table_row(capsys):
     latex = (
         r"\begin{tabular}{ll}" "\n"
         "% #VALUE_ID: LEX-P0002-V0001\n"
@@ -275,3 +280,4 @@ def test_page_accepts_visual_row_kept_in_one_latex_table_row():
          "bbox": [80, 102, 110, 132]},
     ]
     validate_page_latex(latex, fields, 2, 3)
+    assert capsys.readouterr().err == ""

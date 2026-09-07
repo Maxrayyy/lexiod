@@ -305,6 +305,40 @@ def test_layout_error_logs_reason_and_retry_decision(tmp_path, capsys):
     assert "completion marker" in errors[0]["error_message"]
 
 
+def test_visual_row_warning_preserves_fields_without_retry(tmp_path, capsys):
+    payload = _one_page_payload()
+    payload["latex"] = payload["latex"].replace(
+        "% #VALUE_ID: LEX-P0001-V0001", "\\begin{tabular}{l}\n"
+        "% #VALUE_ID: LEX-P0001-V0001"
+    ).replace(
+        r"\fieldvalue{A12}", r"\fieldvalue{A12}\\" + "\n"
+        "% #VALUE_ID: LEX-P0001-V0002\n% #FIELD_VALUE: Other\n"
+        "\\fieldvalue{B34}\\\\\n\\end{tabular}"
+    )
+    payload.pop("fields")
+    payload["field_meta"] = {
+        "V0001": [[10, 20, 40, 40], 0.9, False],
+        "V0002": [[50, 20, 90, 40], 0.8, False],
+    }
+    result, calls = _recognizer_with_responses(
+        tmp_path, [{"response": json.dumps(payload)}]
+    )
+    assert len(calls) == 1
+    assert result.latex == payload["latex"]
+    assert [(f.field_id, f.value) for f in result.evidence.fields] == [
+        ("LEX-P0001-V0001", "A12"), ("LEX-P0001-V0002", "B34")]
+    assert result.evidence.degraded_adapters == ()
+    events = [json.loads(line.removeprefix("[LLM_CALL] "))
+              for line in capsys.readouterr().err.splitlines()
+              if line.startswith("[LLM_CALL] ")]
+    assert not any(event["event"] == "validation_or_request_error" for event in events)
+    warning = next(event for event in events if event["event"] == "validation_warning")
+    assert warning["code"] == "visual_table_row_mismatch"
+    assert warning["page"] == 1
+    assert warning["field_ids"] == ["LEX-P0001-V0001", "LEX-P0001-V0002"]
+    assert warning["action"] == "keep_tex_and_fields"
+
+
 def test_rate_limit_reduces_capacity_then_recovers_slowly():
     gate = AdaptiveConcurrency(initial=4)
     gate.on_rate_limit()
