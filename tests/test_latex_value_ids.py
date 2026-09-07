@@ -15,6 +15,8 @@ def test_common_latex_prompt_requires_one_stable_id_per_logical_value():
 def test_latex_prompt_prefers_synctex_safe_tables_and_checkbox_fields():
     assert "prefer the SyncTeX-safe `tabular`" in LATEX_COMMON_PROMPT
     assert "`tabularx` only" in LATEX_COMMON_PROMPT
+    assert r"use `\multirow{<rows>}{=}{...}`" in LATEX_COMMON_PROMPT
+    assert r"never use a fractional `\linewidth`" in LATEX_COMMON_PROMPT
     assert r"\fieldvalue{\checkboxfield{checked}}" in LATEX_COMMON_PROMPT
     assert r"\newcommand{\checkboxfield}" in LATEX_FIRST_PAGE_PROMPT
     assert r"\checkmark" in LATEX_CHECKBOX_FIELD_COMMAND
