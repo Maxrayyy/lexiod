@@ -15,6 +15,7 @@ import threading
 import time
 
 from PIL import Image
+from lexoid.core.request_errors import ModelUnavailableError, is_request_failure, request_status
 
 from .cache import RecognitionCache, _atomic_write, build_cache_key
 from .models import (
@@ -48,6 +49,16 @@ class AdaptiveConcurrency:
         self.limit, self.maximum, self.minimum = initial, initial, minimum
         self._active = self._successes = 0
         self._condition = threading.Condition()
+        self.failure = None
+
+    def stop(self, error):
+        with self._condition:
+            self.failure = self.failure or error
+            self._condition.notify_all()
+
+    def check_available(self):
+        if self.failure is not None:
+            raise self.failure from None
 
     def on_rate_limit(self):
         with self._condition:
@@ -65,7 +76,8 @@ class AdaptiveConcurrency:
     @contextmanager
     def slot(self):
         with self._condition:
-            self._condition.wait_for(lambda: self._active < self.limit)
+            self._condition.wait_for(lambda: self.failure is not None or self._active < self.limit)
+            self.check_available()
             self._active += 1
         try:
             yield
@@ -109,6 +121,8 @@ class PageRecognizer:
             if evidence.page != page:
                 return None
             latex = normalize_field_annotation_spacing(raw["latex"])
+            if "LEXOID_RECOGNITION_FALLBACK" in latex:
+                return None
             validate_page_checkpoint(latex, page, self.page_count)
             if evidence.fields:
                 validate_page_latex(latex, evidence.fields, page, self.page_count)
@@ -193,7 +207,7 @@ class PageRecognizer:
             evidence = self.prepare_batch([page])[page.page]
         fallback = None
         degraded = False
-        for attempt in range(self.config.max_page_attempts):
+        for attempt in range(max(2, self.config.max_page_attempts)):
             try:
                 with self.gate.slot():
                     from lexoid.core.model_telemetry import call_context
@@ -202,11 +216,14 @@ class PageRecognizer:
                 validate_page_checkpoint(result.latex, page.page, self.page_count)
                 self.gate.on_success()
                 break
+            except ModelUnavailableError:
+                raise
             except Exception as exc:
                 from lexoid.core.model_telemetry import emit
                 if isinstance(exc, RecoverableVisionError) and exc.fallback is not None:
                     fallback = exc.fallback
-                status = getattr(exc, "status_code", None)
+                status = request_status(exc)
+                service_failure = is_request_failure(exc)
                 invalid_model_output = isinstance(exc, ValueError)
                 connection_error = "connection" in type(exc).__name__.lower()
                 retryable = (invalid_model_output
@@ -216,7 +233,9 @@ class PageRecognizer:
                 metadata_only = (isinstance(exc, RecoverableVisionError)
                                  and exc.stage == "field_metadata"
                                  and exc.fallback is not None)
-                will_retry = (retryable and attempt + 1 < self.config.max_page_attempts
+                retry_budget = 2 if service_failure else self.config.max_page_attempts
+                will_retry = ((retryable or service_failure) and attempt + 1 < retry_budget
+                              and status not in (401, 403)
                               and not metadata_only)
                 # Provider exception messages can contain request data; only expose
                 # local validation details, never raw HTTP errors or response bodies.
@@ -229,7 +248,15 @@ class PageRecognizer:
                       "error_stage": getattr(exc, "stage", "response_or_request"),
                       "http_status": status, "has_fallback_tex": fallback is not None,
                       "action": "retry" if will_retry else
+                                "pause_document" if service_failure else
                                 "use_tex" if fallback is not None else "fallback_page"})
+                if service_failure and not will_retry:
+                    error = ModelUnavailableError(page.page, exc)
+                    self.gate.stop(error)
+                    emit({"event": "model_service_unavailable", "stage": "recognize",
+                          "page": page.page, "error_type": type(exc).__name__,
+                          "http_status": status, "action": "pause_document"})
+                    raise error from None
                 if not will_retry:
                     result = fallback or VisionPageResult(
                         page.page,
@@ -247,8 +274,9 @@ class PageRecognizer:
                 evidence.degraded_adapters + ("vision",)
             )))
         evidence = replace(evidence, fields=result.fields)
-        self.cache.save_text("draft", page.page, result.latex)
-        self.cache.save_json("draft", page.page, {"latex": result.latex, "evidence": evidence.to_dict()})
+        if "LEXOID_RECOGNITION_FALLBACK" not in result.latex:
+            self.cache.save_text("draft", page.page, result.latex)
+            self.cache.save_json("draft", page.page, {"latex": result.latex, "evidence": evidence.to_dict()})
         return PageRecognitionResult(page.page, result.latex, evidence, self.cache.key)
 
 
@@ -323,6 +351,12 @@ class DocumentRecognizer:
                     (processed if is_check else results)[number] = result
                 except Exception as exc:
                     errors[number] = exc
+                    if isinstance(exc, ModelUnavailableError):
+                        owner.gate.stop(exc)
+            if owner.gate.failure is not None:
+                for future in [*pending, *checking]:
+                    future.cancel()
+                owner.gate.check_available()
             deliver()
 
         for number in range(1, self.page_count + 1):
@@ -341,6 +375,7 @@ class DocumentRecognizer:
             deliver()
             batch_size = self.config.paddle_batch_size
             for offset in range(0, len(todo), batch_size):
+                owner.gate.check_available()
                 batch, render_jobs = [], {}
                 for number in todo[offset:offset + batch_size]:
                     path = cache.path("render", number, ".png")

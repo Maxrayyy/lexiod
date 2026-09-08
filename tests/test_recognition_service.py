@@ -244,6 +244,67 @@ def test_api_connection_error_is_retried_once(tmp_path, monkeypatch):
     assert "vision" not in results[1].evidence.degraded_adapters
 
 
+def test_transport_outage_stops_new_pages_without_poisoning_cache(tmp_path, monkeypatch):
+    pdf = tmp_path / "input.pdf"
+    pdf.write_bytes(b"pdf")
+    calls = []
+
+    class Offline(Vision):
+        def recognize(self, page, evidence, total):
+            calls.append(page.page)
+            if page.page > 1:
+                raise APIConnectionError("secret provider response")
+            return VisionPageResult(1, "saved\n% LEXOID_PAGE_COMPLETED: 1/20", ())
+
+    monkeypatch.setattr("lexoid.core.recognition.service.time.sleep", lambda _: None)
+    run = recognizer(tmp_path, vision=Offline())
+    run.page_counter = lambda _: 20
+    run.config = replace(run.config, vision_concurrency=1, max_page_attempts=1)
+    with pytest.raises(RuntimeError, match="unavailable"):
+        run.recognize(pdf)
+    assert calls == [1, 2, 2]
+    drafts = list((tmp_path / "cache" / "draft").glob("*/*.json"))
+    assert [int(p.stem) for p in drafts] == [1]
+
+
+@pytest.mark.parametrize("status,attempts", [(401, 1), (403, 1), (429, 2), (503, 2)])
+def test_http_service_errors_have_bounded_retries_and_no_blank_cache(tmp_path, monkeypatch, status, attempts):
+    class HTTPFailure(Exception):
+        status_code = status
+
+    calls = []
+
+    class Offline(Vision):
+        def recognize(self, *_):
+            calls.append(1)
+            raise HTTPFailure("must not appear in logs")
+
+    monkeypatch.setattr("lexoid.core.recognition.service.time.sleep", lambda _: None)
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"pdf")
+    run = recognizer(tmp_path, vision=Offline())
+    run.page_counter = lambda _: 1
+    with pytest.raises(RuntimeError, match="unavailable"):
+        run.recognize(source)
+    assert len(calls) == attempts
+    assert list((tmp_path / "cache/draft").glob("*/*.json")) == []
+
+
+def test_old_placeholder_cache_is_retried_but_good_pages_are_reused(tmp_path):
+    from lexoid.core.recognition.cache import RecognitionCache
+    pdf = tmp_path / "input.pdf"
+    pdf.write_bytes(b"pdf")
+    previous = recognizer(tmp_path, vision=Vision(fail_page=2)).recognize(pdf)
+    cache = RecognitionCache(tmp_path / "cache", previous[1].cache_key)
+    cache.save_text("draft", 2, previous[1].latex)
+    cache.save_json("draft", 2, {"latex": previous[1].latex, "evidence": previous[1].evidence.to_dict()})
+    vision = Vision()
+    result = recognizer(tmp_path, vision=vision).recognize(pdf)
+    assert vision.pages == [2]
+    assert result[0].from_cache and result[2].from_cache
+    assert "LEXOID_RECOGNITION_FALLBACK" not in result[1].latex
+
+
 def _one_page_payload(tex_value="A12", model_guess="A12"):
     return {
         "latex": (
