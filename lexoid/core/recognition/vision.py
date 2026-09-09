@@ -18,7 +18,7 @@ from lexoid.core.prompt_templates import (
 )
 from .models import FieldEvidence, VisionPageResult
 
-PROMPT_VERSION = "hybrid-latex-v6-omit-experimental-figures"
+PROMPT_VERSION = "hybrid-latex-v7-frame-experimental-figures"
 _IDS = re.compile(r"(?m)^\s*% #VALUE_ID:\s*(\S+)\s*$")
 _MARKER = re.compile(r"(?m)^\s*% LEXOID_PAGE_COMPLETED:\s*(\d+)/(\d+)\s*$")
 _NUMBERED_SECTION = re.compile(r"\\(?:sub)*section(?!\*)\s*\{")
