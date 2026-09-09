@@ -18,7 +18,7 @@ from lexoid.core.prompt_templates import (
 )
 from .models import FieldEvidence, VisionPageResult
 
-PROMPT_VERSION = "hybrid-latex-v4-compact-fields"
+PROMPT_VERSION = "hybrid-latex-v5-preserve-table-spans"
 _IDS = re.compile(r"(?m)^\s*% #VALUE_ID:\s*(\S+)\s*$")
 _MARKER = re.compile(r"(?m)^\s*% LEXOID_PAGE_COMPLETED:\s*(\d+)/(\d+)\s*$")
 _NUMBERED_SECTION = re.compile(r"\\(?:sub)*section(?!\*)\s*\{")
