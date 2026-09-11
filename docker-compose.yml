@@ -12,8 +12,8 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
         PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
-    image: lexoid:local
-    # 没有该镜像时构建，而不是去 Docker Hub 拉一个不存在的 lexoid 仓库
+    image: pdftotex:local
+    # 使用本机构建的统一 PDFToTex 镜像，不从 Docker Hub 拉取
     pull_policy: never
     env_file:
       - .env
