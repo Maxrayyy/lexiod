@@ -285,7 +285,6 @@ lexoid parse --help
 - `--model, -m`: LLM model name (default: gemini-2.5-flash)
 - `--pages-per-split`: Pages per chunk (default: 4)
 - `--max-processes`: Parallel processes (default: 4)
-- `--framework`: Static parser framework - `pdfplumber` or `paddleocr`
 - `--format`: Output format - `markdown` (default, plain markdown text) or `json` (full result with metadata, segments, token usage)
 
 #### Schema Command
@@ -309,49 +308,10 @@ lexoid latex --help
 - `--model, -m`: LLM model (default: gpt-4o-mini)
 - `--api`: API provider - openai, gemini, anthropic, ollama, etc. (auto-detected if not specified)
 
-## Supported API Providers
+## 项目集成
 
-- Google
-- OpenAI
-- Hugging Face
-- Together AI
-- OpenRouter
-- Fireworks
-- Ollama
+本项目中的 Lexoid 由上层 PDFToTex 流水线调用，负责视觉识别。运行参数、队列和输出目录由总项目统一管理。
 
-## Ollama Local Parsing
-
-Lexoid supports local `LLM_PARSE` inference through Ollama. The initial recommended model is `gemma4:latest`.
-
-```python
-from lexoid.api import parse
-
-result = parse(
-	"path/to/document.pdf",
-	parser_type="LLM_PARSE",
-	api_provider="ollama",
-	model="gemma4:latest",
-	max_processes=1,
-)
-
-print(result["raw"])
-```
-
-Notes:
-
-- Ollama uses the default local endpoint `http://localhost:11434` unless `OLLAMA_BASE_URL` is set.
-- Lexoid forces `max_processes=1` for Ollama-backed parsing to avoid local multiprocess contention.
-- `AUTO` routing does not select Ollama in this first version; choose it explicitly with `api_provider="ollama"`.
-
-## Benchmark
-
-Results aggregated across 14 documents.
-
-_Note:_ Benchmarks are currently done in the zero-shot setting.
-
-| Rank | Model | SequenceMatcher Similarity | TFIDF Similarity | Time (s) | Cost ($) |
-| --- | --- | --- | --- | --- | --- |
-| 1 | gemini-3-pro-preview | 0.917 (±0.127) | 0.943 (±0.159) | 46.92 | 0.06288 |
 | 2 | gemini-3.5-flash | 0.914 (±0.138) | 0.989 (±0.016) | 16.70 | 0.02936 |
 | 3 | AUTO | 0.901 (±0.134) | 0.988 (±0.016) | 11.53 | 0.02327 |
 | 4 | gemini-3.1-pro-preview | 0.900 (±0.183) | 0.978 (±0.043) | 45.49 | 0.02892 |
@@ -387,8 +347,3 @@ _Note:_ Benchmarks are currently done in the zero-shot setting.
 | 34 | ds4sd/SmolDocling-256M-preview | 0.603 (±0.292) | 0.705 (±0.262) | 507.74 | 0.00000 |
 | 35 | gpt-5.4-nano | 0.600 (±0.309) | 0.856 (±0.119) | 22.51 | 0.00321 |
 | 36 | microsoft/phi-4-multimodal-instruct | 0.589 (±0.273) | 0.820 (±0.197) | 14.00 | 0.00045 |
-| 37 | qwen/qwen-2.5-vl-7b-instruct | 0.498 (±0.378) | 0.630 (±0.445) | 14.73 | 0.00056 |
-
-## Citation
-
-If you use Lexoid in production or publications, please cite accordingly and acknowledge usage. We appreciate the support 🙏
