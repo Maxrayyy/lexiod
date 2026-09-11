@@ -339,6 +339,26 @@ def _page_result(payload, page, evidence, canonical_values=None):
     return VisionPageResult(page=page.page, latex=payload["latex"], fields=tuple(fields))
 
 
+def _load_model_json(text):
+    """Parse model JSON while preserving literal TeX backslashes in strings."""
+    # Protect common multi-letter TeX commands before JSON interprets ``\f`` or
+    # ``\t`` as control characters (for example ``\fieldvalue`` and ``\textbf``).
+    text = re.sub(r"(?<!\\)\\(?=[A-Za-z]{2,})", r"\\\\", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as first_error:
+        # Models occasionally emit ``\\fieldvalue`` directly in a JSON string.
+        # Escape only unknown JSON escapes; valid JSON escapes remain unchanged.
+        repaired = re.sub(r"\\(?=[A-Za-z]{2,})", r"\\\\", text)
+        repaired = re.sub(r"\\(?![\"\\/bfnrt]|u[0-9a-fA-F]{4})", r"\\\\", repaired)
+        if repaired == text:
+            raise
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            raise first_error
+
+
 class VisionLatexAdapter:
     def __init__(self, model, api="openai", config=None, response_factory=None):
         from .models import RecognitionConfig
@@ -376,7 +396,7 @@ class VisionLatexAdapter:
         if not isinstance(text, str):
             raise ValueError("Vision response is not text")
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-        payload = json.loads(text)
+        payload = _load_model_json(text)
         validation_stage = "latex_validation"
         try:
             payload["latex"] = normalize_field_annotation_spacing(payload["latex"])

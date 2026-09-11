@@ -11,6 +11,13 @@ from lexoid.core.recognition.vision import (
     VisionLatexAdapter, compact_evidence, fallback_page_latex,
     normalize_field_annotation_spacing, output_token_budget, validate_page_latex,
 )
+from lexoid.core.prompt_templates import LATEX_COMMON_PROMPT
+
+
+def test_common_prompt_protects_assay_table_tex_and_literal_backslashes():
+    assert "Do not treat literal backslashes in printed values as TeX commands" in LATEX_COMMON_PROMPT
+    assert "Every tabular row must end with exactly one TeX row break" in LATEX_COMMON_PROMPT
+    assert "Never invent a value to repair a table" in LATEX_COMMON_PROMPT
 
 
 def evidence(text="Batch", page=1):
@@ -40,6 +47,15 @@ def test_compact_metadata_derives_values_and_labels_from_tex():
     assert result.fields[0].value == "A12"
     assert result.fields[0].bbox == (10, 20, 100, 50)
     assert result.latex == payload["latex"]
+
+
+def test_model_json_repairs_literal_tex_backslashes():
+    payload = reply()
+    encoded = json.dumps(payload).replace(r"\\fieldvalue", r"\fieldvalue")
+    page = RenderedPage(1, 240, 300, 400, Image.new("RGB", (300, 400)))
+    result = VisionLatexAdapter("test", response_factory=lambda **kw: {
+        "response": encoded}).recognize(page, evidence("A12"), 3)
+    assert r"\fieldvalue{A12}" in result.latex
 
 
 @pytest.mark.parametrize("metadata", [
