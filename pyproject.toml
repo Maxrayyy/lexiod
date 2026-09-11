@@ -28,22 +28,11 @@ python-docx = "^1.1.2"
 nest-asyncio ="^1.6.0"
 pyqt5 = {version = "^5.15.11", markers = "platform_system != 'Linux'"}
 pyqtwebengine = {version = "^5.15.7", markers = "platform_system != 'Linux'"}
-huggingface-hub = "^0.31.2"
-together = "^1.5.34"
 openpyxl = "^3.1.5"
 pptx2md = "^2.0.6"
-mistralai = "^1.8.2"
-anthropic = ">=0.96.0,<1.0.0"
-transformers = "^4.51.3"
-torch = "^2.7.0"
-scikit-learn = "^1.7.1"
-scikit-image = "^0.25.2"
 paddleocr = {version = "^3.3.0", extras = ["doc-parser"]}
-matplotlib = "^3.10.6"
 paddlepaddle = "3.2.2"
 levenshtein = "^0.27.1"
-accelerate = "^1.10.1"
-google-genai = "^1.56.0"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
