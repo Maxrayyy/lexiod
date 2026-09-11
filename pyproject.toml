@@ -4,7 +4,7 @@ version = "0.1.23-dev"
 description = ""
 authors = []
 readme = "README.md"
-packages = [{ include = "lexoid" }, { include = "formkit" }]
+packages = [{ include = "lexoid" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"

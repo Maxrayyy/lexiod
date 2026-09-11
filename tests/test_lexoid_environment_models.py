@@ -69,14 +69,3 @@ def test_generic_parser_resolves_model_with_explicit_provider(monkeypatch):
     monkeypatch.setenv("DEFAULT_LLM", "gpt-parser")
     assert llm_parser.parse_llm_doc("input.pdf", title="input", api_provider="openai")["model"] == "gpt-parser"
     assert llm_parser.parse_llm_doc("input.pdf", title="input", model="gpt-explicit")["model"] == "gpt-explicit"
-
-
-def test_formkit_uses_its_own_environment_model(tmp_path, monkeypatch):
-    import importlib
-    formkit = importlib.import_module("formkit.extract")
-    monkeypatch.setattr(formkit, "render_pages", lambda *a, **kw: [])
-    source = tmp_path / "input.pdf"
-    source.write_bytes(b"pdf")
-    monkeypatch.setenv("FORMKIT_MODEL", "gpt-formkit")
-    assert formkit.extract(str(source))["model"] == "gpt-formkit"
-    assert formkit.extract(str(source), model="gpt-explicit")["model"] == "gpt-explicit"
