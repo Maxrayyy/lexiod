@@ -538,7 +538,7 @@ def is_api_key_set(api_provider: str) -> bool:
     return False
 
 
-def router(path: str, priority: str = "speed", autoselect_llm: bool = False) -> str:
+def router(path: str, priority: str = "speed") -> str:
     """
     Routes the file path to the appropriate parser based on the file type.
 
@@ -546,25 +546,6 @@ def router(path: str, priority: str = "speed", autoselect_llm: bool = False) -> 
         path (str): The file path to route.
         priority (str): The priority for routing: "accuracy" (preference to LLM_PARSE) or "speed" (preference to STATIC_PARSE).
     """
-    model_name = None
-    if autoselect_llm:
-        from lexoid.core.llm_selector import DocumentRankedLLMSelector
-
-        logger.debug("Autoselecting LLM for parsing.")
-        model_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "model_data"
-        )
-        selector = DocumentRankedLLMSelector(
-            model_dir=model_dir, use_image_embeddings=False
-        )
-        ranking = selector.rank_models(path)
-        for model, _ in ranking:
-            api_provider = get_api_provider_for_model(model)
-            if is_api_key_set(api_provider):
-                logger.debug(f"Selected model: {model}.")
-                model_name = model
-                return "LLM_PARSE", model_name
-
     file_type = get_file_type(path)
     if (
         file_type.startswith("text/")

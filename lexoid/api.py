@@ -65,7 +65,6 @@ def retry_with_different_parser_type(func):
             if len(args) > 1:
                 if args[1] == ParserType.AUTO:
                     router_priority = kwargs.get("router_priority", "speed")
-                    autoselect_llm = kwargs.get("autoselect_llm", False)
                     if router_priority == "cost" and has_image_in_pdf(kwargs["path"]):
                         # Handling this outside of router to allow for multiple func calls
                         kwargs["parser_type"] = ParserType.STATIC_PARSE
@@ -83,9 +82,7 @@ def retry_with_different_parser_type(func):
                         )
                         kwargs["parser_type"] = ParserType.LLM_PARSE
                         return func(**kwargs)
-                    routed_parser_type, model = router(
-                        kwargs["path"], router_priority, autoselect_llm=autoselect_llm
-                    )
+                    routed_parser_type, model = router(kwargs["path"], router_priority)
                     if model is not None:
                         kwargs["model"] = model
                     parser_type = ParserType[routed_parser_type]
