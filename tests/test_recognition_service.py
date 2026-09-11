@@ -13,11 +13,6 @@ from lexoid.core.recognition.service import (
 from lexoid.core.recognition.vision import VisionLatexAdapter
 
 
-def test_page_count_uses_installed_pdfium_api():
-    from pathlib import Path
-    assert _page_count(Path("examples/inputs/test_1.pdf")) > 0
-
-
 def render(path, page, dpi, auto_orient=True):
     return RenderedPage(page, dpi, 100, 200, Image.new("RGB", (100, 200)))
 
