@@ -251,7 +251,7 @@ p076-dimension_inspection_record-outer_diameter_measured
 ### 8.1 audit
 
 ```bash
-python -m texopt.cli audit input.tex --report audit.json
+python -m texopt.optimization.cli audit input.tex --report audit.json
 ```
 
 输出：
@@ -268,7 +268,7 @@ python -m texopt.cli audit input.tex --report audit.json
 ### 8.2 optimise
 
 ```bash
-python -m texopt.cli optimise input.tex -o input.opt.tex \
+python -m texopt.optimization.cli optimise input.tex -o input.opt.tex \
   --registry fields.json \
   --report report.json \
   --diff opt.diff
@@ -309,7 +309,7 @@ strict 默认行为：
 ```bash
 xelatex -synctex=1 -interaction=nonstopmode input.opt.tex
 
-python -m texopt.cli verify input.opt.tex input.opt.pdf \
+python -m texopt.optimization.cli verify input.opt.tex input.opt.pdf \
   --registry fields.json \
   --baseline-pdf input.orig.pdf \
   --check-geometry
