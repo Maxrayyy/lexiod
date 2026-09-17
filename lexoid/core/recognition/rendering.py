@@ -11,6 +11,11 @@ from .models import RenderedPage
 
 DocumentFactory = Callable[[str], Any]
 OrientationNormalizer = Callable[[Image.Image], Image.Image]
+OrientationDetector = Callable[[Image.Image], tuple[int, float]]
+
+
+_ORIENTATION_CONFIDENCE = 0.80
+_TOP_REGION_FRACTION = 0.25
 
 
 def _default_document_factory(path: str) -> Any:
@@ -19,16 +24,32 @@ def _default_document_factory(path: str) -> Any:
     return pdfium.PdfDocument(path)
 
 
-def _default_orientation_normalizer(image: Image.Image) -> Image.Image:
-    from lexoid.core.conversion_utils import detect_document_orientation
-
-    rotation, confidence = detect_document_orientation(image)
+def _normalize_page_orientation(
+    image: Image.Image,
+    detector: OrientationDetector,
+) -> Image.Image:
+    rotation, confidence = detector(image)
     if rotation not in (0, 90, 180, 270):
         raise ValueError(f"Unsupported document orientation: {rotation}")
-    rotation = rotation if confidence >= 0.80 else 0
+    rotation = rotation if confidence >= _ORIENTATION_CONFIDENCE else 0
+
+    if rotation in (90, 270):
+        top_height = max(1, round(image.height * _TOP_REGION_FRACTION))
+        top_rotation, top_confidence = detector(image.crop((0, 0, image.width, top_height)))
+        if top_rotation not in (0, 90, 180, 270):
+            raise ValueError(f"Unsupported document orientation: {top_rotation}")
+        if top_rotation == 0 and top_confidence >= _ORIENTATION_CONFIDENCE:
+            rotation = 0
+
     image = image.rotate(rotation, expand=True) if rotation else image.copy()
     image.info["lexoid_rotation"] = rotation
     return image
+
+
+def _default_orientation_normalizer(image: Image.Image) -> Image.Image:
+    from lexoid.core.conversion_utils import detect_document_orientation
+
+    return _normalize_page_orientation(image, detect_document_orientation)
 
 
 def render_pdf_page_from_document(

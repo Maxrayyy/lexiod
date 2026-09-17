@@ -3,6 +3,7 @@ from __future__ import annotations
 from PIL import Image
 
 from lexoid.core.recognition.rendering import (
+    _normalize_page_orientation,
     render_pdf_page,
     render_pdf_page_from_document,
 )
@@ -43,6 +44,36 @@ class _Document:
 
 def _image(width: int = 100, height: int = 200) -> Image.Image:
     return Image.new("RGB", (width, height), color="white")
+
+
+def test_orientation_keeps_page_upright_when_top_quarter_is_upright() -> None:
+    source = _image()
+    calls: list[tuple[int, int]] = []
+
+    def detect(image: Image.Image) -> tuple[int, float]:
+        calls.append(image.size)
+        return (270, 0.87) if image.size == source.size else (0, 0.92)
+
+    result = _normalize_page_orientation(source, detector=detect)
+
+    assert calls == [(100, 200), (100, 50)]
+    assert result.size == (100, 200)
+    assert result.info["lexoid_rotation"] == 0
+
+
+def test_orientation_rotates_page_when_top_quarter_agrees() -> None:
+    source = _image()
+    calls: list[tuple[int, int]] = []
+
+    def detect(image: Image.Image) -> tuple[int, float]:
+        calls.append(image.size)
+        return 90, 0.92
+
+    result = _normalize_page_orientation(source, detector=detect)
+
+    assert calls == [(100, 200), (100, 50)]
+    assert result.size == (200, 100)
+    assert result.info["lexoid_rotation"] == 90
 
 
 def test_render_uses_requested_dpi_scale() -> None:
