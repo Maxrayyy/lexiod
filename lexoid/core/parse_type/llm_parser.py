@@ -708,22 +708,34 @@ def create_response(
     max_tokens: int = 1024,
     reasoning_effort: Optional[str] = None,
 ) -> Dict:
-    from anthropic import Anthropic
-    from huggingface_hub import InferenceClient
-    from mistralai import Mistral
     from openai import OpenAI
 
-    # Till Together new API is stable
-    os.environ.setdefault("TOGETHER_NO_BANNER", "1")
-    from together import Together
+    def create_huggingface_client():
+        from huggingface_hub import InferenceClient
+
+        return InferenceClient(token=os.environ["HUGGINGFACEHUB_API_TOKEN"])
+
+    def create_together_client():
+        os.environ.setdefault("TOGETHER_NO_BANNER", "1")
+        from together import Together
+
+        return Together()
+
+    def create_mistral_client():
+        from mistralai import Mistral
+
+        return Mistral(api_key=os.environ["MISTRAL_API_KEY"])
+
+    def create_anthropic_client():
+        from anthropic import Anthropic
+
+        return Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     # Initialize appropriate client
     clients = {
         "openai": lambda: OpenAI(**({"max_retries": 0} if CALL_CONTEXT.get() else {})),
-        "huggingface": lambda: InferenceClient(
-            token=os.environ["HUGGINGFACEHUB_API_TOKEN"]
-        ),
-        "together": lambda: Together(),
+        "huggingface": create_huggingface_client,
+        "together": create_together_client,
         "openrouter": lambda: OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.environ["OPENROUTER_API_KEY"],
@@ -740,12 +752,8 @@ def create_response(
             base_url=os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/v1"),
             api_key=os.environ["MINIMAX_API_KEY"],
         ),
-        "mistral": lambda: Mistral(
-            api_key=os.environ["MISTRAL_API_KEY"],
-        ),
-        "anthropic": lambda: Anthropic(
-            api_key=os.environ["ANTHROPIC_API_KEY"],
-        ),
+        "mistral": create_mistral_client,
+        "anthropic": create_anthropic_client,
         "gemini": lambda: None,  # Gemini is handled separately
         "ollama": lambda: None,
     }
