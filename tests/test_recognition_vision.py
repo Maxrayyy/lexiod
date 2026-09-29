@@ -17,6 +17,8 @@ from lexoid.core.prompt_templates import LATEX_COMMON_PROMPT
 def test_common_prompt_protects_assay_table_tex_and_literal_backslashes():
     assert "Do not treat literal backslashes in printed values as TeX commands" in LATEX_COMMON_PROMPT
     assert "Every tabular row must end with exactly one TeX row break" in LATEX_COMMON_PROMPT
+    assert r"use `\newline` for a visual line break" in LATEX_COMMON_PROMPT
+    assert r"Use `\tabularnewline` (or `\\[...]`) only after the final cell" in LATEX_COMMON_PROMPT
     assert "Never invent a value to repair a table" in LATEX_COMMON_PROMPT
 
 
