@@ -606,7 +606,7 @@ def parse_to_latex(
             max_page_attempts=kwargs.get("max_page_attempts", 2),
             reasoning_effort=kwargs.get("reasoning_effort",
                 (os.getenv("SOL_VISION_REASONING_EFFORT", "none").strip() or None)
-                if model.lower() == "gpt-5.6-sol" else None),
+                if model.lower() in {"gpt-5.6-sol", "gpt-6-sol"} else None),
             min_output_tokens=8192 if ocr == "none" else 2048,
             enable_vl_fallback=ocr == "paddleocr" and kwargs.get("enable_vl_fallback", True),
         )

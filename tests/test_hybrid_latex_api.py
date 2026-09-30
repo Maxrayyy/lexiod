@@ -70,6 +70,8 @@ def test_hybrid_cli_forwards_settings(tmp_path, monkeypatch):
     ("gpt-5.6-sol", "none", "none"),
     ("gpt-5.6-sol", "low", "low"),
     ("gpt-5.6-sol", "", None),
+    ("gpt-6-sol", None, "none"),
+    ("gpt-6-sol", "low", "low"),
     ("gpt-6-astra", "none", None),
 ])
 def test_sol_vision_defaults_to_none_without_changing_astra(tmp_path, monkeypatch, model, setting, expected):
