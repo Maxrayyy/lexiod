@@ -506,3 +506,25 @@ def test_vision_only_never_constructs_paddle_adapters_and_resumes(tmp_path, monk
     run.renderer = forbidden
     assert all(result.from_cache for result in run.recognize(source))
     assert vision.pages == []
+
+
+def test_render_cache_preserves_deskew_when_draft_is_retried(tmp_path):
+    from dataclasses import replace
+    from lexoid.core.recognition.cache import RecognitionCache
+    pdf = tmp_path / "input.pdf"
+    pdf.write_bytes(b"pdf")
+    first = recognizer(tmp_path)
+    first.renderer = lambda *args: replace(render(*args), deskew=12.5, source_size=(90, 190))
+    previous = first.recognize(pdf)
+    cache = RecognitionCache(tmp_path / "cache", previous[0].cache_key)
+    assert cache.load_json("render", 1)["deskew"] == 12.5
+    # Force recognition from cached pixels rather than accepting a cached draft.
+    cache.save_json("draft", 1, {})
+    second = recognizer(tmp_path)
+    def forbidden(*args):
+        raise AssertionError("Expected cached rendered image")
+    second.renderer = forbidden
+    results = second.recognize(pdf)
+    assert results[0].evidence.render.deskew == 12.5
+    assert results[0].evidence.render.source_size == (90, 190)
+    assert not results[0].from_cache

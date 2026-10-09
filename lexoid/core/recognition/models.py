@@ -126,6 +126,15 @@ class RecognitionConfig:
             raise ValueError("Unsupported reasoning_effort")
 
 
+def _source_size(value):
+    """Upright source dimensions, before deskew expands the raster canvas."""
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError("source_size must contain width and height")
+    return tuple(_positive_int(v, "source_size dimension") for v in value)
+
+
 @dataclass(frozen=True)
 class RenderMetadata:
     """Dimensions of the page image used to produce recognition evidence."""
@@ -134,18 +143,27 @@ class RenderMetadata:
     width: int
     height: int
     rotation: int = 0
+    deskew: float = 0.0
+    source_size: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
+        _source_size(self.source_size)
+        if type(self.deskew) not in (int, float) or not -20 <= self.deskew <= 20:
+            raise ValueError("deskew must be a finite angle between -20 and 20")
         _positive_int(self.dpi, "dpi")
         _positive_int(self.width, "width")
         _positive_int(self.height, "height")
         if type(self.rotation) is not int or self.rotation not in (0, 90, 180, 270):
             raise ValueError("render rotation must be 0, 90, 180, or 270")
 
-    def to_dict(self) -> dict[str, int]:
+    def to_dict(self) -> dict[str, object]:
         result = {"dpi": self.dpi, "width": self.width, "height": self.height}
         if self.rotation:
             result["rotation"] = self.rotation
+        if self.deskew:
+            result["deskew"] = self.deskew
+        if self.source_size is not None:
+            result["source_size"] = list(self.source_size)
         return result
 
     @classmethod
@@ -155,6 +173,8 @@ class RenderMetadata:
             width=_positive_int(payload.get("width"), "render width"),
             height=_positive_int(payload.get("height"), "render height"),
             rotation=payload.get("rotation", 0),
+            deskew=payload.get("deskew", 0.0),
+            source_size=_source_size(payload.get("source_size")),
         )
 
 
@@ -168,9 +188,14 @@ class RenderedPage:
     height: int
     image: Any
     rotation: int = 0
+    deskew: float = 0.0
+    source_size: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         _positive_int(self.page, "page")
+        _source_size(self.source_size)
+        if type(self.deskew) not in (int, float) or not -20 <= self.deskew <= 20:
+            raise ValueError("deskew must be a finite angle between -20 and 20")
         _positive_int(self.dpi, "dpi")
         _positive_int(self.width, "width")
         _positive_int(self.height, "height")

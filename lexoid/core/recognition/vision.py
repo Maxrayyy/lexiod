@@ -18,7 +18,7 @@ from lexoid.core.prompt_templates import (
 )
 from .models import FieldEvidence, VisionPageResult
 
-PROMPT_VERSION = "latex-direct-v9-cell-newline-boundaries"
+PROMPT_VERSION = "latex-direct-v10-table-deskew"
 _IDS = re.compile(r"(?m)^\s*% #VALUE_ID:\s*(\S+)\s*$")
 _MARKER = re.compile(r"(?m)^\s*% LEXOID_PAGE_COMPLETED:\s*(\d+)/(\d+)\s*$")
 _NUMBERED_SECTION = re.compile(r"\\(?:sub)*section(?!\*)\s*\{")

@@ -134,14 +134,14 @@ class PageRecognizer:
         if self.config.ocr == "none":
             return {page.page: PageEvidence(
                 "recognition/v1", page.page,
-                RenderMetadata(page.dpi, page.width, page.height, page.rotation),
+                RenderMetadata(page.dpi, page.width, page.height, page.rotation, page.deskew, page.source_size),
             ) for page in pages}
         prepared, missing = {}, []
         for page in pages:
             raw = self.cache.load_json("ocr", page.page) if self.resume else None
             try:
                 ev = PageEvidence.from_dict(raw)
-                if ev.page != page.page or ev.render != RenderMetadata(page.dpi, page.width, page.height, page.rotation):
+                if ev.page != page.page or ev.render != RenderMetadata(page.dpi, page.width, page.height, page.rotation, page.deskew, page.source_size):
                     raise ValueError("Cached render does not match")
                 prepared[page.page] = ev
             except (AttributeError, KeyError, TypeError, ValueError):
@@ -157,7 +157,7 @@ class PageRecognizer:
                         degraded = ("paddle_text",)
             for page in missing:
                 ev = PageEvidence("recognition/v1", page.page,
-                                  RenderMetadata(page.dpi, page.width, page.height, page.rotation),
+                                  RenderMetadata(page.dpi, page.width, page.height, page.rotation, page.deskew, page.source_size),
                                   ocr_blocks=blocks.get(page.page, ()), degraded_adapters=degraded)
                 self.cache.save_json("ocr", page.page, ev.to_dict())
                 prepared[page.page] = ev
@@ -389,7 +389,8 @@ class DocumentRecognizer:
                         if not isinstance(meta, dict) or (meta.get("width"), meta.get("height")) != image.size:
                             raise ValueError("Missing render metadata")
                         batch.append(RenderedPage(number, self.config.initial_render_dpi,
-                                                  *image.size, image, meta.get("rotation", 0)))
+                                                  *image.size, image, meta.get("rotation", 0), meta.get("deskew", 0.0),
+                                                  RenderMetadata.from_dict(meta).source_size))
                     except (OSError, ValueError):
                         render_jobs[number] = renders.submit(self.renderer, str(pdf_path), number,
                             self.config.initial_render_dpi, self.auto_orient)
@@ -399,7 +400,7 @@ class DocumentRecognizer:
                     page.image.save(buffer, format="PNG")
                     _atomic_write(cache.path("render", number, ".png"), buffer.getvalue())
                     cache.save_json("render", number, RenderMetadata(
-                        page.dpi, page.width, page.height, page.rotation).to_dict())
+                        page.dpi, page.width, page.height, page.rotation, page.deskew, page.source_size).to_dict())
                     batch.append(page)
                 prepared = owner.prepare_batch(batch)
                 for page in batch:

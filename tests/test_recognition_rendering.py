@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PIL import Image
+import pytest
 
 from lexoid.core.recognition.rendering import (
     _normalize_page_orientation,
@@ -151,3 +152,75 @@ def test_public_render_rejects_page_outside_document() -> None:
         raise AssertionError("render_pdf_page accepted a page outside the document")
 
     assert document.closed is True
+
+
+def _slanted_form(angle):
+    from PIL import ImageDraw
+    image = Image.new('RGB', (1000, 1000), 'white')
+    draw = ImageDraw.Draw(image)
+    for y in range(180, 821, 80):
+        draw.line((100, y, 900, y), fill='black', width=3)
+    for x in (100, 280, 900):
+        draw.line((x, 180, x, 820), fill='black', width=3)
+    # Mark the label and far-right option belonging to the SAME source row.
+    for x in (180, 800):
+        draw.ellipse((x-8, 370-8, x+8, 370+8), fill='blue')
+    return image.rotate(angle, expand=True, fillcolor='white')
+
+
+@pytest.mark.parametrize("angle", [-18, -12, -3, 3, 12, 18])
+def test_render_levels_same_row_fields_before_vision(angle):
+    import numpy as np
+    source = _slanted_form(angle)
+    rendered = render_pdf_page_from_document(
+        _Document([source]), 0, 240,
+        orientation_normalizer=lambda image: image.copy(),
+    )
+    pixels = np.asarray(rendered.image)
+    ys, xs = np.where((pixels[:, :, 2] > 200) & (pixels[:, :, 0] < 50))
+    middle = (xs.min() + xs.max()) / 2
+    assert abs(ys[xs < middle].mean() - ys[xs > middle].mean()) < 3
+    assert abs(rendered.deskew + angle) < 0.5
+
+
+def test_render_no_auto_orient_preserves_slanted_source():
+    source = _slanted_form(-12)
+    rendered = render_pdf_page_from_document(_Document([source]), 0, 240, auto_orient=False)
+    assert rendered.image.tobytes() == source.tobytes()
+
+
+def test_deskew_preserves_upright_grid_and_blank_page():
+    from lexoid.core.recognition.table_geometry import deskew_table
+    for source in (_slanted_form(0), Image.new("RGB", (1000, 1000), "white")):
+        result, angle = deskew_table(source)
+        assert angle == 0
+        assert result.tobytes() == source.tobytes()
+
+
+def test_deskew_rejects_parallel_lines_without_column_boundaries():
+    from PIL import ImageDraw
+    from lexoid.core.recognition.table_geometry import deskew_table
+    source = Image.new("RGB", (1000, 1000), "white")
+    draw = ImageDraw.Draw(source)
+    for y in range(100, 901, 80):
+        draw.line((100, y, 900, y), fill="black", width=3)
+    source = source.rotate(-12, expand=True, fillcolor="white")
+    result, angle = deskew_table(source)
+    assert angle == 0
+    assert result.tobytes() == source.tobytes()
+
+
+def test_deskew_retains_quarter_turn_metadata_and_pixels_at_edges():
+    import numpy as np
+    from PIL import ImageDraw
+    source = _slanted_form(-12)
+    ImageDraw.Draw(source).rectangle((0, 0, 10, 10), fill="red")
+    rotated = source.rotate(-90, expand=True)
+    result = render_pdf_page_from_document(
+        _Document([rotated]), 0, 240,
+        orientation_normalizer=lambda image: _normalize_page_orientation(image, lambda _: (90, 1.0)),
+    )
+    assert result.rotation == 90
+    assert abs(result.deskew-12) < .5
+    pixels = np.asarray(result.image)
+    assert ((pixels[:, :, 0] > 200) & (pixels[:, :, 1] < 50)).sum() >= 90

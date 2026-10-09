@@ -7,6 +7,7 @@ from typing import Any, Callable
 from PIL import Image
 
 from .models import RenderedPage
+from .table_geometry import deskew_table
 
 
 DocumentFactory = Callable[[str], Any]
@@ -68,9 +69,14 @@ def render_pdf_page_from_document(
         raise ValueError(f"dpi must be between 72 and 600, got {dpi}")
 
     image = document[page_index].render(scale=dpi / 72.0).to_pil().convert("RGB")
+    deskew = 0.0
+    source_size = None
     if auto_orient:
         normalizer = orientation_normalizer or _default_orientation_normalizer
         image = normalizer(image).convert("RGB")
+        original_size = image.size
+        image, deskew = deskew_table(image)
+        source_size = original_size if deskew else None
 
     image = image.copy()
     width, height = image.size
@@ -81,6 +87,8 @@ def render_pdf_page_from_document(
         height=height,
         image=image,
         rotation=image.info.get("lexoid_rotation", 0),
+        deskew=deskew,
+        source_size=source_size,
     )
 
 

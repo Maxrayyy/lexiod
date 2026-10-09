@@ -195,3 +195,16 @@ def test_rendered_page_validates_image_dimensions() -> None:
 def test_layout_region_rejects_invalid_score() -> None:
     with pytest.raises(ValueError, match="score"):
         LayoutRegion(kind="table", bbox=(0, 0, 10, 10), score=1.1)
+
+
+@pytest.mark.parametrize("angle", [12.4, -3.2, 0])
+def test_render_metadata_roundtrips_deskew(angle):
+    metadata = RenderMetadata(240, 1200, 1800, 90, angle, (1000, 1600))
+    assert RenderMetadata.from_dict(metadata.to_dict()) == metadata
+    assert RenderMetadata.from_dict({"dpi": 240, "width": 100, "height": 200}).deskew == 0
+
+
+@pytest.mark.parametrize("angle", [True, float("nan"), float("inf"), 21, -21, "12"])
+def test_render_metadata_rejects_invalid_deskew(angle):
+    with pytest.raises(ValueError, match="deskew"):
+        RenderMetadata(240, 100, 200, deskew=angle)
