@@ -77,8 +77,15 @@ Ensure accurate representation of all content, including tables and visual eleme
 """
 
 LATEX_CHECKBOX_FIELD_COMMAND = r"""\newcommand{\lexoidcheckboxbox}[1]{%
-  \begingroup\setlength{\fboxsep}{0.15ex}%
-  \fbox{\rule{0pt}{1.25ex}\makebox[1.25ex][c]{\scriptsize\sffamily #1}}%
+  \begingroup
+  \setlength{\fboxsep}{0.15ex}%
+  % All states use one fixed square; centre the mark independently of its glyph.
+  % The math axis follows the surrounding font size and prevents raised boxes.
+  \ensuremath{\vcenter{\hbox{\fbox{%
+    \rule[-0.625ex]{0pt}{1.25ex}%
+    \makebox[1.25ex][c]{%
+      \raisebox{\dimexpr-.5\height+.5\depth\relax}[0pt][0pt]{%
+        \fontsize{0.65em}{0.65em}\selectfont\sffamily #1}}}}}}%
   \endgroup}
 \newcommand{\checkboxfield}[1]{%
   \ifstrequal{#1}{checked}{\lexoidcheckboxbox{\ensuremath{\checkmark}}}{%
